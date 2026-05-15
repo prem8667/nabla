@@ -6,7 +6,7 @@ export type TransformRequest = {
   args?: Record<string, unknown>;
 };
 
-export type TransformResponse = {
+export type TransformResult = {
   input_latex: string;
   output_latex: string;
   output_sympy: string;
@@ -21,6 +21,31 @@ export type Suggestion = {
 
 export type SuggestResponse = {
   suggestions: Suggestion[];
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type ChatTurnRequest = {
+  history: ChatMessage[];
+  active_expr: string | null;
+  active_op: string | null;
+};
+
+export type ChatTurnResponse = {
+  kind: "transform" | "clarification" | "error";
+  message: string;
+  transform: TransformResult | null;
+  expr_used: string | null;
+  op_used: string | null;
+  var_used: string | null;
+};
+
+export type LlmStatus = {
+  configured: boolean;
+  model: string | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
@@ -42,8 +67,19 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return r.json();
 }
 
+async function getJSON<T>(path: string): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
 export const transform = (req: TransformRequest) =>
-  postJSON<TransformResponse>("/transform", req);
+  postJSON<TransformResult>("/transform", req);
 
 export const suggest = (expr: string) =>
   postJSON<SuggestResponse>("/suggest", { expr });
+
+export const chatTurn = (req: ChatTurnRequest) =>
+  postJSON<ChatTurnResponse>("/chat-turn", req);
+
+export const llmStatus = () => getJSON<LlmStatus>("/llm-status");

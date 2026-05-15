@@ -81,6 +81,50 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 5 — V1: natural-language chat via Claude Sonnet 4.6
+
+**The intent:** The structured commands (`integrate x*sin(x) dx`) worked but felt unnatural for a researcher who just wants to think out loud. This commit puts an LLM in the chat pane so you can type "find the integral of x times sin x" or "now differentiate that" — without losing the SymPy oracle that catches wrong moves.
+
+**Backend (`apps/api/main.py`):**
+- New endpoint `POST /chat-turn` that takes the conversation history plus the current board state and returns either a transform (with the SymPy result already computed) or a clarification question.
+- Two tool definitions for Claude: `apply_transform` (op + optional expr + optional var + 1–2 sentence explanation) and `ask_clarification` (a question to send back to the user).
+- Forced tool-use via `tool_choice={"type": "any"}` so Claude can never produce a plain-text reply — every turn is a structured action.
+- Per-turn context injection: the active expression and its op are appended to the last user message so Claude knows what's on the board without polluting the cached system-prompt prefix.
+- Prompt caching on the system prompt + tool schemas (`cache_control: ephemeral`) → ~10× cheaper input tokens after the first turn.
+- Transform logic refactored into a shared `_apply_op` helper so `/transform`, `/suggest`, and `/chat-turn` all use the same SymPy code path.
+- New endpoint `GET /llm-status` so the frontend can show whether the LLM is reachable.
+- Graceful error handling: Anthropic API errors (credit exhausted, rate limits, network) are caught and returned as `kind: "error"` rather than HTTP failures.
+
+**Frontend (`apps/web/`):**
+- Chat now routes through `/chat-turn` first. If the LLM call errors out or the LLM emits an unparseable response, it automatically falls back to the V0.1 regex parser — so the app stays usable through credit exhaustion or network blips.
+- `LLM on` / `LLM off` indicator at the top of the chat pane (with tooltip).
+- Empty-state hints change based on LLM availability: natural-language examples when on, structured-command syntax when off.
+- New assistant-role message style for Claude's prose explanations.
+- Chat history sent to the API filters out red error messages — only real user/assistant turns become LLM context.
+
+**Configuration:**
+- `apps/api/.env.example` (committed) documents the two env vars: `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (defaults to `claude-sonnet-4-6`).
+- `apps/api/.env` (gitignored) holds the real key locally.
+- `requirements.txt` gains `anthropic>=0.75.0` and `python-dotenv>=1.0.1`.
+
+**Verified working:**
+- "find the integral of x times sin x" → `integrate(x*sin(x), x)` → `-x*cos(x) + sin(x)` with a useful prose explanation.
+- "now differentiate that" → uses the active output, applies `diff`, returns `x*sin(x)` — round-trips correctly.
+- "factor this polynomial: x cubed minus six x squared plus eleven x minus six" → parses the words into `x**3 - 6*x**2 + 11*x - 6`, factors as `(x-3)(x-2)(x-1)`.
+- "now find its roots" (with the factored form active) → `solve` returns `[1, 2, 3]`.
+- "do something interesting" (empty board) → asks a clarifying question.
+- Malformed input ("q@x{}") → Claude asks for clarification rather than passing junk to SymPy.
+
+**What's intentionally left out:**
+- Hover-history on individual terms (per-term provenance).
+- Persistence: refresh still wipes the session.
+- A visible streaming indicator while Claude is thinking (currently just "…" on the submit button).
+- Multi-step plans: today Claude picks one move per turn. Multi-move plans (e.g. "do the integral and then simplify in one go") are left for V1.5.
+
+---
+
 ## What this gives you today
 
-A working calculus workbench you can drive entirely with the chips and a starting command. The "research lab" feel — fork, compare, jump back — is there in a basic form. The thing that's missing for an outside user is being able to talk to it in natural language, which is what the next commit adds.
+A working calculus workbench where you can talk to it like a real assistant. You can describe a problem in natural language, follow up by saying "now do X to that," and Claude figures out the right symbolic op while SymPy actually does the math. The DAG of past steps and the chip-driven future moves still work exactly as before — the LLM just sits where the regex parser used to.

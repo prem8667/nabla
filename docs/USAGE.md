@@ -97,9 +97,33 @@ Plain textarea. Type whatever you want. It is never sent to the backend or to an
 
 ---
 
-## 4. Commands you can type
+## 4. Talking to Nabla — natural language (V1)
 
-There are two forms of command:
+If the LLM is configured (`ANTHROPIC_API_KEY` set in `apps/api/.env`), the chat indicator at the top of the chat pane shows **LLM on**, and you can just write in your own words:
+
+```
+find the integral of x sin x
+now differentiate that
+what are the roots of x cubed minus six x squared plus eleven x minus six
+factor it as a polynomial in y
+simplify
+```
+
+Claude Sonnet 4.6 reads your message plus the current board state, picks the right symbolic operation, and emits it as a structured tool call. The backend then validates and executes the move through SymPy — so the LLM never decides whether the math is right, only what to try.
+
+If your input is genuinely ambiguous (e.g. "do something interesting" with an empty board), the LLM will ask a clarifying question instead of guessing.
+
+### How chaining works in natural language
+
+When you say "that" or "it" or just "simplify", the backend tells the LLM what's currently on the board, and the LLM produces a tool call with no `expr` field — meaning "use the active output." Same chain pattern as the structured commands, just easier to type.
+
+### When the LLM is off (no key, or it errored)
+
+The chat indicator shows **LLM off** and the placeholder switches to structured-command syntax. Use the commands described below.
+
+## 5. Structured commands (V0.1 — still works as a fallback)
+
+Two forms of structured command. Both still work whether or not the LLM is on — if the LLM call fails for any reason (credit exhausted, network blip, anything), Nabla automatically falls back to parsing your input as a structured command.
 
 ### Form A — with an expression
 
@@ -198,7 +222,7 @@ The "primary symbol" detection picks `x` if present, otherwise `y`, `t`, `z`, th
 
 | Feature | Status | Notes |
 |---|---|---|
-| **LLM in chat** | Not started | V1 will use Claude Sonnet 4.6 via Anthropic tool-calling. Replaces the regex parser. Users type natural language. |
+| **LLM in chat** | ✅ Shipped (V1) | Claude Sonnet 4.6 via Anthropic tool-calling. Natural language works; structured commands stay as a fallback. |
 | **Hover-history on terms** | Not started | Click any sub-term in the rendered equation → see where it came from. Needs per-term provenance from SymPy. |
 | **Visual branch connectors** | Partial | Timeline shows tree depth via indent, but no drawn lines yet. |
 | **Persistence** | Not started | Refresh wipes the session. Needs IndexedDB. |
