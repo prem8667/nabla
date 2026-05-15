@@ -82,6 +82,12 @@ Open http://localhost:3000.
 - **Enter** submits. **Shift+Enter** inserts a newline.
 - Above the input is the history of what you've sent and what Nabla replied with.
 
+### Inspecting the equation
+
+Under the active equation is a **parts breakdown** — the expression split into its top-level pieces (terms of a sum, factors of a product, base/exponent of a power). Click any part chip and Nabla explains what that piece is and why it's there.
+
+**Double-click any step** in the timeline to open its detail panel: the full input → output, the op applied, the LLM's reasoning, raw SymPy, and which step it forked from.
+
 ### Board pane
 
 The board has four layers, from outside in:

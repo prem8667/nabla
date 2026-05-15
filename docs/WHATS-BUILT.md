@@ -235,6 +235,33 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 9 — V1.4: term breakdown, step detail, equation morph
+
+**The intent:** Close the last items from the mission comparison — "explain each part of the equation", "double-click to expand a step's internal history", and "equations morph as you discuss".
+
+**Backend (`apps/api/main.py`):**
+- `POST /decompose` — splits an expression into its top-level structural parts. Sums → addends, products → factors, powers → base + exponent, functions → arguments, equations → LHS + RHS. Returns each part's LaTeX, SymPy form, and a human label ("factor 2 of 3").
+- `POST /explain-part` — takes the whole expression and one part; asks the LLM to explain that part's role in 1-2 sentences. Falls back to a structural description if the LLM is off.
+
+**Frontend (`apps/web/`):**
+- **`TermBreakdown` component** — under the active equation, shows the expression's parts as clickable chips (each rendered with KaTeX). Click a part → fetches an LLM explanation of what that part does and why it's there, shown inline. This is the "explain each part" piece of the vision.
+- **`StepDetail` component** — double-clicking a timeline node opens a modal with the step's full internals: input → output equations, the op and its pretty form, the LLM's explanation, raw SymPy, lineage (which step it forked from), and timestamp.
+- **Equation morph animation** — when a new active step lands, the board content animates in (fade + slight rise + scale). Respects `prefers-reduced-motion`. Keyed on the step id so it replays on every new step.
+- Timeline rows now have a double-click handler and a "click to focus · double-click for detail" hint.
+
+**Honest scope note:** This delivers the *user-facing value* of per-term inspection — you can click any part of the current equation and learn what it is. What it does NOT do is **cross-step provenance**: tracing that "this `sin(x)` came specifically from differentiating that `-cos(x)` two steps ago". True provenance needs a custom SymPy step-by-step engine that records every rewrite — a multi-day effort kept for V2. The `StepDetail` panel says so explicitly.
+
+**Verified — 21-case suite (all PASS):**
+- 12 direct ops still correct.
+- `/decompose` splits sum (2 terms), product (3 factors), power (base+exponent) correctly.
+- `/explain-part` returns a real LLM explanation.
+- `/llm-status` healthy.
+- Chat-turn: fresh integral, ODE → dsolve, partial fractions → apart, Fermat → commits.
+
+---
+
 ## What this gives you today
 
-Real-feeling research workbench. Sessions survive refresh. First-time users land on a welcome state that explains the layout and offers one-click starting points. Hovering past steps reveals what they were without losing your current focus. Branch structure is visible, not implied. Twelve ops cover most of an undergrad calculus + algebra + ODE curriculum. Almost every item from the original mission is shipped — only per-term hover-history remains as a future feature.
+A research workbench that delivers nearly the whole original vision. Sessions persist. New users are onboarded. The equation visibly morphs forward on each step. You can click any part of the current expression and ask what it means. You can double-click any past step to see its full internals. Branch structure is drawn, not implied. Twelve ops span calculus, algebra, series, summations, and ODEs. The one genuinely unfinished item — cross-step per-term provenance — is documented as V2 because it needs a dedicated step-tracking engine.

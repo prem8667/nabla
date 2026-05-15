@@ -233,6 +233,32 @@ class LlmStatus(BaseModel):
     model: str | None
 
 
+class DecomposeRequest(BaseModel):
+    expr: str
+
+
+class ExprPart(BaseModel):
+    kind: str  # term | factor | base | exponent | argument | atom
+    label: str  # human label, e.g. "term 2 of 3"
+    latex: str
+    sympy: str
+
+
+class DecomposeResponse(BaseModel):
+    whole_latex: str
+    structure: str  # "sum" | "product" | "power" | "function" | "atomic"
+    parts: list[ExprPart]
+
+
+class ExplainPartRequest(BaseModel):
+    whole: str
+    part: str
+
+
+class ExplainPartResponse(BaseModel):
+    explanation: str
+
+
 # ─── SymPy helpers ───────────────────────────────────────────────────────────
 
 SUPPORTED_OPS = {
@@ -432,6 +458,100 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
         unique.append(Suggestion(op="simplify", label="simplify"))
 
     return SuggestResponse(suggestions=unique)
+
+
+# ─── Expression decomposition ─────────────────────────────────────────────────
+
+
+def _part(kind: str, label: str, sub: sympy.Expr) -> ExprPart:
+    return ExprPart(kind=kind, label=label, latex=sympy.latex(sub), sympy=str(sub))
+
+
+@app.post("/decompose", response_model=DecomposeResponse)
+def decompose(req: DecomposeRequest) -> DecomposeResponse:
+    """Split an expression into its top-level structural parts.
+
+    This is the basis for "explain each part of the equation": the frontend
+    renders each part as a hoverable/clickable chip.
+    """
+    expr = _sympify(req.expr)
+    parts: list[ExprPart] = []
+    structure = "atomic"
+
+    if expr.is_Add:
+        structure = "sum"
+        terms = expr.as_ordered_terms()
+        for i, t in enumerate(terms):
+            parts.append(_part("term", f"term {i + 1} of {len(terms)}", t))
+    elif expr.is_Mul:
+        structure = "product"
+        factors = list(expr.as_ordered_factors())
+        for i, f in enumerate(factors):
+            parts.append(_part("factor", f"factor {i + 1} of {len(factors)}", f))
+    elif expr.is_Pow:
+        structure = "power"
+        parts.append(_part("base", "base", expr.base))
+        parts.append(_part("exponent", "exponent", expr.exp))
+    elif isinstance(expr, sympy.Function):
+        structure = "function"
+        fname = type(expr).__name__
+        for i, a in enumerate(expr.args):
+            parts.append(_part("argument", f"argument {i + 1} of {fname}", a))
+    elif isinstance(expr, (sympy.Equality, sympy.Eq)):
+        structure = "equation"
+        parts.append(_part("term", "left-hand side", expr.lhs))
+        parts.append(_part("term", "right-hand side", expr.rhs))
+
+    return DecomposeResponse(
+        whole_latex=sympy.latex(expr),
+        structure=structure,
+        parts=parts,
+    )
+
+
+@app.post("/explain-part", response_model=ExplainPartResponse)
+def explain_part(req: ExplainPartRequest) -> ExplainPartResponse:
+    """Ask the LLM to explain one part's role within the whole expression."""
+    # SymPy-validate both inputs first so we never explain nonsense.
+    whole = _sympify(req.whole)
+    part = _sympify(req.part)
+
+    if _openai_client is None:
+        # Fallback: a structural description without the LLM.
+        return ExplainPartResponse(
+            explanation=(
+                f"This part is `{part}`. "
+                f"(LLM is off — set OPENAI_API_KEY for a richer explanation.)"
+            )
+        )
+
+    prompt = (
+        f"In the mathematical expression  {whole}  consider the sub-expression  {part} .\n"
+        f"Explain, in 1-2 sentences for a researcher, what role this sub-expression plays "
+        f"in the whole — what it represents and why it is there. Do not restate the whole "
+        f"expression. Be specific and concise. Plain text only."
+    )
+    try:
+        resp = _openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=2048,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are Nabla, explaining parts of math expressions to researchers. Terse, precise, no fluff.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        if not text:
+            text = f"This sub-expression is `{part}`."
+        return ExplainPartResponse(explanation=text)
+    except Exception as e:
+        logger.warning("explain-part LLM error: %s", e)
+        return ExplainPartResponse(
+            explanation=f"This sub-expression is `{part}`. (LLM explanation unavailable: {e})"
+        )
 
 
 # ─── LLM-driven chat turn ─────────────────────────────────────────────────────

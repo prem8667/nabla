@@ -3,7 +3,9 @@
 import { useState } from "react";
 import type { Suggestion } from "@/lib/api";
 import { Equation } from "./Equation";
+import { StepDetail } from "./StepDetail";
 import { SuggestChips } from "./SuggestChips";
+import { TermBreakdown } from "./TermBreakdown";
 
 export type Step = {
   id: string;
@@ -44,10 +46,16 @@ export function BoardPane({
   llmReady: boolean | null;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const active = steps.find((s) => s.id === activeId) ?? steps[steps.length - 1] ?? null;
   const ancestors = active ? ancestorPath(steps, active.id) : [];
   const hovered = hoveredId ? steps.find((s) => s.id === hoveredId) ?? null : null;
+  const detailStep = detailId ? steps.find((s) => s.id === detailId) ?? null : null;
+  const detailIndex = detailStep ? steps.findIndex((s) => s.id === detailStep.id) : -1;
+  const detailParent = detailStep?.parentId
+    ? steps.find((s) => s.id === detailStep.parentId) ?? null
+    : null;
 
   return (
     <div className="flex h-full flex-col" style={{ background: "var(--pane)" }}>
@@ -65,24 +73,35 @@ export function BoardPane({
           hoveredId={hoveredId}
           onSelect={onSelect}
           onHover={setHoveredId}
+          onOpenDetail={setDetailId}
         />
 
         <div className="flex flex-1 items-center justify-center overflow-auto p-8">
           {!active ? (
             <Welcome onPick={onSubmitExample} pending={pending} llmReady={llmReady} />
           ) : (
-            <div className="flex flex-col items-center gap-6">
+            <div key={active.id} className="nabla-morph flex flex-col items-center gap-6">
               <ActiveStep step={active} />
               <SuggestChips
                 suggestions={suggestions}
                 onPick={onPickSuggestion}
                 pending={pending}
               />
+              <TermBreakdown sympyExpr={active.outputSympy} />
             </div>
           )}
         </div>
 
         {hovered && hovered.id !== active?.id ? <HoverPreview step={hovered} /> : null}
+
+        {detailStep ? (
+          <StepDetail
+            step={detailStep}
+            parent={detailParent}
+            index={detailIndex}
+            onClose={() => setDetailId(null)}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -264,12 +283,14 @@ function Timeline({
   hoveredId,
   onSelect,
   onHover,
+  onOpenDetail,
 }: {
   steps: Step[];
   activeId: string | null;
   hoveredId: string | null;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
+  onOpenDetail: (id: string) => void;
 }) {
   if (steps.length === 0) return null;
   const tree = buildTree(steps);
@@ -291,8 +312,12 @@ function Timeline({
           hoveredId={hoveredId}
           onSelect={onSelect}
           onHover={onHover}
+          onOpenDetail={onOpenDetail}
         />
       ))}
+      <div className="mt-2 px-2 text-center text-[9px] leading-tight" style={{ color: "var(--text-dim)" }}>
+        click to focus · double-click for detail
+      </div>
     </div>
   );
 }
@@ -327,6 +352,7 @@ function TimelineRow({
   hoveredId,
   onSelect,
   onHover,
+  onOpenDetail,
 }: {
   row: TreeRow;
   previousDepth: number;
@@ -334,6 +360,7 @@ function TimelineRow({
   hoveredId: string | null;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
+  onOpenDetail: (id: string) => void;
 }) {
   const { step, depth, siblingIndex } = row;
   const active = step.id === activeId;
@@ -357,9 +384,10 @@ function TimelineRow({
       ) : null}
       <button
         onClick={() => onSelect(step.id)}
+        onDoubleClick={() => onOpenDetail(step.id)}
         onMouseEnter={() => onHover(step.id)}
         onMouseLeave={() => onHover(null)}
-        title={step.pretty}
+        title={`${step.pretty}  —  double-click for detail`}
         className="relative flex h-8 min-w-[2.25rem] items-center justify-center rounded-full px-2 text-[10px] font-mono"
         style={{
           background: active

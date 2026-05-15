@@ -85,6 +85,23 @@ async function getJSON<T>(path: string): Promise<T> {
   return r.json();
 }
 
+export type ExprPart = {
+  kind: "term" | "factor" | "base" | "exponent" | "argument" | "atom";
+  label: string;
+  latex: string;
+  sympy: string;
+};
+
+export type DecomposeResponse = {
+  whole_latex: string;
+  structure: "sum" | "product" | "power" | "function" | "equation" | "atomic";
+  parts: ExprPart[];
+};
+
+export type ExplainPartResponse = {
+  explanation: string;
+};
+
 export const transform = (req: TransformRequest) =>
   postJSON<TransformResult>("/transform", req);
 
@@ -95,3 +112,9 @@ export const chatTurn = (req: ChatTurnRequest) =>
   postJSON<ChatTurnResponse>("/chat-turn", req);
 
 export const llmStatus = () => getJSON<LlmStatus>("/llm-status");
+
+export const decompose = (expr: string) =>
+  postJSON<DecomposeResponse>("/decompose", { expr });
+
+export const explainPart = (whole: string, part: string) =>
+  postJSON<ExplainPartResponse>("/explain-part", { whole, part });
