@@ -1,4 +1,4 @@
-"""Nabla API — V1.
+"""Nabla API — V1.2.
 
 Endpoints:
   GET  /health
@@ -10,6 +10,10 @@ Endpoints:
 SymPy is the oracle — every transformation, whether typed, chip-clicked, or
 LLM-proposed, is computed and validated by SymPy. The LLM only chooses the move
 and explains it.
+
+LLM provider: OpenAI (GPT-5 Mini by default). The chat completions API and
+"function" tool format. Note that GPT-5 family models burn reasoning tokens
+against max_completion_tokens, so the budget here is generous.
 """
 
 from __future__ import annotations
@@ -20,17 +24,21 @@ import os
 from typing import Any, Literal
 
 import sympy
-from anthropic import Anthropic, APIError, APIStatusError
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openai import (
+    APIError as OpenAIAPIError,
+    APIStatusError as OpenAIAPIStatusError,
+    OpenAI,
+)
 from pydantic import BaseModel, Field
 
 load_dotenv()
 logger = logging.getLogger("nabla")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Nabla API", version="1.0.0")
+app = FastAPI(title="Nabla API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,9 +49,9 @@ app.add_middleware(
 
 # ─── LLM client ──────────────────────────────────────────────────────────────
 
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-_anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-_anthropic_client: Anthropic | None = Anthropic(api_key=_anthropic_key) if _anthropic_key else None
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
+_openai_key = os.environ.get("OPENAI_API_KEY")
+_openai_client: OpenAI | None = OpenAI(api_key=_openai_key) if _openai_key else None
 
 SYSTEM_PROMPT = """You are Nabla, a math-derivation assistant. The user is a researcher working through a derivation on a three-pane workspace; the middle pane shows their currently active expression.
 
@@ -84,74 +92,81 @@ Supported ops:
 If the user's request maps to multiple ops in sequence (e.g. "find the integral and then simplify it"), pick the FIRST step only. The user can chain further with another turn or a chip click.
 """
 
+# OpenAI tool format
 TOOLS: list[dict[str, Any]] = [
     {
-        "name": "apply_transform",
-        "description": "Apply a single symbolic math operation. SymPy will execute it.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "op": {
-                    "type": "string",
-                    "enum": [
-                        "integrate",
-                        "diff",
-                        "simplify",
-                        "factor",
-                        "expand",
-                        "solve",
-                        "limit",
-                        "series",
-                        "summation",
-                    ],
-                    "description": (
-                        "Which operation to apply. "
-                        "integrate/diff: needs var. "
-                        "solve: needs var; treats expr as `expr = 0`. "
-                        "limit: takes expr → as var approaches a point. "
-                        "series: Taylor/Maclaurin series expansion. "
-                        "summation: sum of expr over var from lower to upper bound."
-                    ),
+        "type": "function",
+        "function": {
+            "name": "apply_transform",
+            "description": "Apply a single symbolic math operation. SymPy will execute it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": [
+                            "integrate",
+                            "diff",
+                            "simplify",
+                            "factor",
+                            "expand",
+                            "solve",
+                            "limit",
+                            "series",
+                            "summation",
+                        ],
+                        "description": (
+                            "Which operation to apply. "
+                            "integrate/diff: needs var. "
+                            "solve: needs var; treats expr as `expr = 0`. "
+                            "limit: takes expr → as var approaches a point. "
+                            "series: Taylor/Maclaurin series expansion. "
+                            "summation: sum of expr over var from lower to upper bound."
+                        ),
+                    },
+                    "expr": {
+                        "type": "string",
+                        "description": "SymPy-parseable expression. OMIT this field when applying the op to the current active board state.",
+                    },
+                    "var": {
+                        "type": "string",
+                        "description": "Variable name (e.g. 'x'). Used by integrate, diff, solve, limit, series, summation. Optional when obvious from context.",
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": (
+                            "Op-specific arguments. Keys vary by op:\n"
+                            "  - limit: {point: number/string-symbol (default 0), direction: '+'/'-'/'+-' (default '+-')}\n"
+                            "  - series: {x0: number-or-symbol (default 0), n: integer truncation order (default 6)}\n"
+                            "  - summation: {from: number (default 0), to: number or 'oo' (default 'oo')}\n"
+                            "  - other ops: usually no args needed; var is at top level."
+                        ),
+                        "additionalProperties": True,
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "1-2 sentences explaining why this move makes sense for a researcher.",
+                    },
                 },
-                "expr": {
-                    "type": "string",
-                    "description": "SymPy-parseable expression. OMIT this field when applying the op to the current active board state.",
-                },
-                "var": {
-                    "type": "string",
-                    "description": "Variable name (e.g. 'x'). Used by integrate, diff, solve, limit, series, summation. Optional when obvious from context.",
-                },
-                "args": {
-                    "type": "object",
-                    "description": (
-                        "Op-specific arguments. Keys vary by op:\n"
-                        "  - limit: {point: number/string-symbol (default 0), direction: '+'/'-'/'+-' (default '+-')}\n"
-                        "  - series: {x0: number-or-symbol (default 0), n: integer truncation order (default 6)}\n"
-                        "  - summation: {from: number (default 0), to: number or 'oo' (default 'oo')}\n"
-                        "  - other ops: usually no args needed; var is at top level."
-                    ),
-                    "additionalProperties": True,
-                },
-                "explanation": {
-                    "type": "string",
-                    "description": "1-2 sentences explaining why this move makes sense for a researcher.",
-                },
+                "required": ["op", "explanation"],
             },
-            "required": ["op", "explanation"],
         },
     },
     {
-        "name": "ask_clarification",
-        "description": "Ask the user a clarifying question when their input genuinely cannot be turned into a transform.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "A specific question that, once answered, would let you pick a transform.",
+        "type": "function",
+        "function": {
+            "name": "ask_clarification",
+            "description": "Ask the user a clarifying question when their input genuinely cannot be turned into a transform.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "A specific question that, once answered, would let you pick a transform.",
+                    },
                 },
+                "required": ["question"],
             },
-            "required": ["question"],
         },
     },
 ]
@@ -242,7 +257,7 @@ def _primary_symbol(expr: sympy.Expr) -> str:
     syms = sorted(expr.free_symbols, key=lambda s: str(s))
     if not syms:
         return "x"
-    for preferred in ("x", "y", "t", "z"):
+    for preferred in ("x", "y", "t", "z", "n"):
         if any(str(s) == preferred for s in syms):
             return preferred
     return str(syms[0])
@@ -279,7 +294,7 @@ def _apply_op(expr_str: str, op: str, args: dict[str, Any]) -> TransformResult:
             var = _symbol(args.get("var") or _primary_symbol(expr))
             point_raw = args.get("point", 0)
             point = _sympify(str(point_raw)) if not isinstance(point_raw, sympy.Expr) else point_raw
-            direction = args.get("direction", "+-")  # "+", "-", or "+-"
+            direction = args.get("direction", "+-")
             if direction not in ("+", "-", "+-"):
                 direction = "+-"
             result = sympy.limit(expr, var, point, direction)
@@ -322,8 +337,8 @@ def health() -> dict[str, str]:
 @app.get("/llm-status", response_model=LlmStatus)
 def llm_status() -> LlmStatus:
     return LlmStatus(
-        configured=_anthropic_client is not None,
-        model=ANTHROPIC_MODEL if _anthropic_client is not None else None,
+        configured=_openai_client is not None,
+        model=OPENAI_MODEL if _openai_client is not None else None,
     )
 
 
@@ -397,7 +412,7 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
 def _build_user_turn_with_context(
     user_text: str, active_expr: str | None, active_op: str | None
 ) -> str:
-    """Inject the current board state into the user's message so the model has it without us caching it."""
+    """Inject the current board state into the user's message."""
     if active_expr is None:
         ctx = "[board context: empty]"
     else:
@@ -406,12 +421,10 @@ def _build_user_turn_with_context(
     return f"{user_text}\n\n{ctx}"
 
 
-def _call_anthropic(history: list[ChatMessage], active_expr: str | None, active_op: str | None):
-    assert _anthropic_client is not None
+def _call_openai(history: list[ChatMessage], active_expr: str | None, active_op: str | None):
+    assert _openai_client is not None
 
-    # Build the messages list. Inject context only into the LAST user message so the cached
-    # prefix (system + tools) stays stable across turns.
-    messages: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     for i, m in enumerate(history):
         is_last_user = i == len(history) - 1 and m.role == "user"
         content = (
@@ -421,60 +434,62 @@ def _call_anthropic(history: list[ChatMessage], active_expr: str | None, active_
         )
         messages.append({"role": m.role, "content": content})
 
-    return _anthropic_client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=512,
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        tools=TOOLS,
-        tool_choice={"type": "any"},  # force tool use, no plain-text replies
+    # GPT-5 family burns reasoning tokens against max_completion_tokens, so keep this generous.
+    return _openai_client.chat.completions.create(
+        model=OPENAI_MODEL,
+        max_completion_tokens=4096,
         messages=messages,
+        tools=TOOLS,
+        tool_choice="required",  # force a tool call, no plain text
     )
 
 
 @app.post("/chat-turn", response_model=ChatTurnResponse)
 def chat_turn(req: ChatTurnRequest) -> ChatTurnResponse:
-    if _anthropic_client is None:
+    if _openai_client is None:
         return ChatTurnResponse(
             kind="error",
-            message="LLM not configured. Set ANTHROPIC_API_KEY in apps/api/.env.",
+            message="LLM not configured. Set OPENAI_API_KEY in apps/api/.env.",
         )
     if not req.history:
         return ChatTurnResponse(kind="error", message="Empty chat history.")
 
     try:
-        resp = _call_anthropic(req.history, req.active_expr, req.active_op)
-    except APIStatusError as e:
-        # Surface credit / rate-limit errors directly
+        resp = _call_openai(req.history, req.active_expr, req.active_op)
+    except OpenAIAPIStatusError as e:
         try:
             payload = e.response.json()
             detail = payload.get("error", {}).get("message") or str(e)
         except Exception:
             detail = str(e)
-        logger.warning("Anthropic API error: %s", detail)
+        logger.warning("OpenAI API status error: %s", detail)
         return ChatTurnResponse(kind="error", message=detail)
-    except APIError as e:
-        logger.warning("Anthropic error: %s", e)
+    except OpenAIAPIError as e:
+        logger.warning("OpenAI API error: %s", e)
         return ChatTurnResponse(kind="error", message=f"LLM error: {e}")
-    except Exception as e:  # network etc.
+    except Exception as e:
         logger.exception("Unexpected LLM error")
         return ChatTurnResponse(kind="error", message=f"LLM unreachable: {e}")
 
-    # Extract the first tool_use block
-    tool_block = next((b for b in resp.content if b.type == "tool_use"), None)
-    if tool_block is None:
-        # Model went rogue and produced text — surface it so we don't silently drop it
-        text_block = next((b for b in resp.content if b.type == "text"), None)
-        msg = text_block.text if text_block else "Model did not emit a tool call."
-        return ChatTurnResponse(kind="error", message=msg)
+    choice = resp.choices[0]
+    msg = choice.message
+    tool_calls = msg.tool_calls or []
 
-    tool_name = tool_block.name
-    tool_input: dict[str, Any] = dict(tool_block.input) if hasattr(tool_block, "input") else {}
+    if not tool_calls:
+        # GPT-5 should always tool-call given tool_choice='required', but handle the failure
+        text = msg.content or "Model did not emit a tool call."
+        if choice.finish_reason == "length":
+            text = "LLM ran out of token budget mid-response. Try again with a shorter prompt."
+        return ChatTurnResponse(kind="error", message=text)
+
+    tc = tool_calls[0]
+    tool_name = tc.function.name
+    try:
+        tool_input: dict[str, Any] = json.loads(tc.function.arguments or "{}")
+    except json.JSONDecodeError:
+        return ChatTurnResponse(
+            kind="error", message=f"LLM emitted malformed tool arguments: {tc.function.arguments}"
+        )
 
     if tool_name == "ask_clarification":
         question = tool_input.get("question", "Could you clarify?")
@@ -490,7 +505,6 @@ def chat_turn(req: ChatTurnRequest) -> ChatTurnResponse:
         proposed_expr: str | None = tool_input.get("expr")
         var: str | None = tool_input.get("var")
 
-        # If the model omitted expr, use the active board state.
         expr_to_use = proposed_expr if proposed_expr is not None else req.active_expr
         if not expr_to_use:
             return ChatTurnResponse(
@@ -498,7 +512,6 @@ def chat_turn(req: ChatTurnRequest) -> ChatTurnResponse:
                 message="The board is empty — could you give me an expression to start with?",
             )
 
-        # Merge top-level var with the op-specific args dict from the LLM.
         merged_args: dict[str, Any] = dict(tool_input.get("args") or {})
         if var:
             merged_args["var"] = var

@@ -1,12 +1,15 @@
 # LLM integration plan (V1)
 
+> **Update (V1.2):** The LLM provider is now **OpenAI GPT-5 Mini** (`gpt-5-mini`), not Claude. The architectural choices below are the same; only the SDK and tool format differ. See `docs/WHATS-BUILT.md` (Commit 7) for the migration details. The reasoning below is retained for context on why the original choice was Claude.
+
+
 This is the plan for the next big step: replacing the regex command parser with a real LLM that takes natural language.
 
 ---
 
 ## Which LLM
 
-**Recommendation: Claude Sonnet 4.6 via the Anthropic API** (model id `claude-sonnet-4-6`).
+**Recommendation: Claude Sonnet 4.6 via the Anthropic API** (model id `gpt-5-mini (current) — earlier this was claude-sonnet-4-6`).
 
 ### Why Claude
 
@@ -54,7 +57,7 @@ This is the plan for the next big step: replacing the regex command parser with 
                                   └──────┬──────┘
                                          │
                                          │ Anthropic Messages API
-                                         │   model: claude-sonnet-4-6
+                                         │   model: gpt-5-mini (current) — earlier this was claude-sonnet-4-6
                                          │   tools: [TransformAction, AskClarification]
                                          │   system: "you are nabla, …"
                                          ▼

@@ -99,7 +99,7 @@ Plain textarea. Type whatever you want. It is never sent to the backend or to an
 
 ## 4. Talking to Nabla — natural language (V1)
 
-If the LLM is configured (`ANTHROPIC_API_KEY` set in `apps/api/.env`), the chat indicator at the top of the chat pane shows **LLM on**, and you can just write in your own words:
+If the LLM is configured (`OPENAI_API_KEY` set in `apps/api/.env`, with a valid OpenAI key), the chat indicator at the top of the chat pane shows **LLM on**, and you can just write in your own words:
 
 ```
 find the integral of x sin x
@@ -109,7 +109,7 @@ factor it as a polynomial in y
 simplify
 ```
 
-Claude Sonnet 4.6 reads your message plus the current board state, picks the right symbolic operation, and emits it as a structured tool call. The backend then validates and executes the move through SymPy — so the LLM never decides whether the math is right, only what to try.
+OpenAI GPT-5 Mini reads your message plus the current board state, picks the right symbolic operation, and emits it as a structured tool call. The backend then validates and executes the move through SymPy — so the LLM never decides whether the math is right, only what to try.
 
 If your input is genuinely ambiguous (e.g. "do something interesting" with an empty board), the LLM will ask a clarifying question instead of guessing.
 

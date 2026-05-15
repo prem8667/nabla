@@ -159,6 +159,43 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 7 — V1.2: LLM switched to OpenAI GPT-5 Mini
+
+**The intent:** Anthropic credits ran out during testing. User provided an OpenAI key and asked to port the LLM path to GPT-5 Mini (cheaper, decent tool-calling for our schema).
+
+**Backend (`apps/api/main.py`):**
+- Replaced Anthropic SDK with OpenAI SDK.
+- Tool schema rewritten in OpenAI's `{type: "function", function: {name, description, parameters}}` shape.
+- System prompt moved into the messages array as a `{role: "system"}` message.
+- Tool choice forced via `tool_choice="required"` (OpenAI's equivalent of Anthropic's `tool_choice={"type": "any"}`).
+- `tool_calls` parsing: response shape is `resp.choices[0].message.tool_calls[i].function.arguments`, and `arguments` is a JSON string that needs `json.loads`.
+- `max_completion_tokens=4096` (generous) because GPT-5 models burn reasoning tokens against this limit, even when the visible output is short. A small budget causes `finish_reason="length"` with empty content.
+- Env vars renamed: `ANTHROPIC_API_KEY → OPENAI_API_KEY`, `ANTHROPIC_MODEL → OPENAI_MODEL` (default `gpt-5-mini`).
+- `requirements.txt`: `anthropic` removed, `openai>=1.55.0` added.
+
+**Frontend:** No changes. The wire format for `/chat-turn`, `/transform`, `/suggest`, and `/llm-status` is unchanged, so the frontend continues to work without recompilation.
+
+**Verified working — full 19-case test suite:**
+- All 9 direct ops (integrate, diff, simplify, factor, expand, solve, limit, series, summation) compute the correct SymPy result.
+- `/suggest` returns the expected chips for polynomial and exp/log shapes.
+- Natural-language fresh integral request → correct integrate.
+- "Fermat's tangent method" → commits to `diff(x**2)`. (System prompt did its job.)
+- "l'Hôpital's rule" → commits to `limit(sin(x)/x, x, 0)`.
+- "Show me a Taylor series" → commits to `series(sin(x), x, 0)`.
+- "Geometric series sum" → commits to `summation`.
+- Chain: "now differentiate that" with active expression → diff round-trips back to the original.
+- Natural-language limit: "limit of sin x over x as x approaches zero" → correct result `1`.
+- Word-form factor: "factor x cubed minus six x squared plus eleven x minus six" → `(x-3)(x-2)(x-1)`.
+- Malformed input "q@x{}" → LLM charitably reinterprets as `q(x)` and integrates symbolically, with an explanation that q is unspecified. Not a crash.
+
+**Gotchas captured (in memory):**
+- GPT-5 reasoning tokens: ALWAYS budget ≥1024 tokens for `max_completion_tokens` or short responses fail with `finish_reason="length"`.
+- OpenAI tool format differs from Anthropic: `tools=[{type: "function", function: {...}}]` and arguments arrive as a JSON string, not parsed.
+
+---
+
 ## What this gives you today
 
-A real symbolic math workbench. Calculus derivations that touch limits, Taylor expansions, and summations now work alongside the original integrate/diff/factor/etc. The LLM is more decisive — it picks canonical examples when you describe a method instead of pestering you for specifics. The DAG, the chips, the timeline, the breadcrumb all work the same as before.
+A real symbolic math workbench. Calculus derivations that touch limits, Taylor expansions, and summations work alongside the original ops. The LLM is more decisive — picks canonical examples when you describe a method. The DAG, the chips, the timeline, the breadcrumb all work the same as before. Cost per chat turn is ~12× cheaper than the previous Claude Sonnet setup, with comparable behavior on our schema.
