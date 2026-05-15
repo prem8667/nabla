@@ -1,116 +1,131 @@
-import type { TransformRequest } from "./api";
+import type { Op, TransformRequest } from "./api";
 
 /**
- * V0 parser: turn free-form chat input into a TransformRequest.
+ * V0.1 parser: turn free-form chat input into a TransformRequest.
  *
- * Supports patterns like:
- *   integrate x*sin(x) dx
- *   integrate x*sin(x) d x
- *   ∫ x*sin(x) dx
- *   d/dx x**2
- *   diff x**2 dx
- *   simplify sin(x)**2 + cos(x)**2
- *   factor x**2 + 2*x*y + y**2
- *   expand (x+1)**3
- *   solve x**2 - 4
- *   solve x**2 - 4 for x
+ * Two forms:
+ *   1. "<op> <expr> [dx | for x | ...]"  — uses the provided expression
+ *   2. "<op> [dx | for x | ...]"          — op-only; uses the *active step's
+ *                                            output* as the expression. This is
+ *                                            how a derivation chains forward.
+ *
+ * Examples:
+ *   integrate x*sin(x) dx     (form 1)
+ *   simplify                  (form 2 — operates on active output)
+ *   factor                    (form 2)
+ *   diff dy                   (form 2 — diff w.r.t. y)
+ *   solve for x               (form 2)
  *
  * If no pattern matches, returns { error }.
- *
- * V1 will replace this with an LLM that emits structured TransformActions.
  */
 export type ParseResult =
-  | { ok: true; req: TransformRequest; pretty: string }
+  | { ok: true; req: Omit<TransformRequest, "expr"> & { expr?: string }; pretty: (e: string) => string }
   | { ok: false; error: string };
 
-const trimDx = (s: string): { expr: string; var: string } => {
+const trimDx = (s: string): { expr: string; var: string | undefined } => {
   const m = s.match(/^(.*?)\s*d\s*([a-zA-Z])\s*$/);
   if (m) return { expr: m[1].trim(), var: m[2] };
-  return { expr: s.trim(), var: "x" };
+  return { expr: s.trim(), var: undefined };
 };
+
+const trimForVar = (s: string): { expr: string; var: string | undefined } => {
+  const m = s.match(/^(.*?)\s+for\s+([a-zA-Z])\s*$/i);
+  if (m) return { expr: m[1].trim(), var: m[2] };
+  return { expr: s.trim(), var: undefined };
+};
+
+/** Strip a trailing "d<var>" or "for <var>" with no preceding expr. */
+const trailingVar = (s: string): string | undefined => {
+  let m = s.match(/^d\s*([a-zA-Z])\s*$/);
+  if (m) return m[1];
+  m = s.match(/^for\s+([a-zA-Z])\s*$/i);
+  if (m) return m[1];
+  return undefined;
+};
+
+function makeOpReq(
+  op: Op,
+  exprPart: string | undefined,
+  varName: string | undefined,
+): ParseResult {
+  const args: Record<string, unknown> = {};
+  if (varName) args.var = varName;
+  return {
+    ok: true,
+    req: exprPart ? { expr: exprPart, op, args } : { op, args },
+    pretty: (e) => prettify(op, e, varName),
+  };
+}
+
+function prettify(op: Op, expr: string, v: string | undefined): string {
+  const sym = v ?? "x";
+  switch (op) {
+    case "integrate":
+      return `∫ ${expr} d${sym}`;
+    case "diff":
+      return `d/d${sym} [ ${expr} ]`;
+    case "simplify":
+      return `simplify( ${expr} )`;
+    case "factor":
+      return `factor( ${expr} )`;
+    case "expand":
+      return `expand( ${expr} )`;
+    case "solve":
+      return `solve( ${expr} = 0, ${sym} )`;
+  }
+}
 
 export function parseCommand(raw: string): ParseResult {
   const input = raw.trim();
   if (!input) return { ok: false, error: "empty input" };
 
-  // integrate <expr> dx   |   ∫ <expr> dx
-  let m = input.match(/^(?:integrate|∫|int)\s+(.+)$/i);
-  if (m) {
-    const { expr, var: v } = trimDx(m[1]);
-    if (!expr) return { ok: false, error: "missing expression after integrate" };
-    return {
-      ok: true,
-      req: { expr, op: "integrate", args: { var: v } },
-      pretty: `∫ ${expr} d${v}`,
-    };
-  }
+  // d/dx <expr>
+  let m = input.match(/^d\/d([a-zA-Z])\s+(.+)$/i);
+  if (m) return makeOpReq("diff", m[2].trim(), m[1]);
 
-  // d/dx <expr>   |   diff <expr> dx
-  m = input.match(/^d\/d([a-zA-Z])\s+(.+)$/i);
-  if (m) {
-    const v = m[1];
-    const expr = m[2].trim();
-    return {
-      ok: true,
-      req: { expr, op: "diff", args: { var: v } },
-      pretty: `d/d${v} [ ${expr} ]`,
-    };
-  }
-  m = input.match(/^(?:diff|derivative)\s+(.+)$/i);
-  if (m) {
-    const { expr, var: v } = trimDx(m[1]);
-    if (!expr) return { ok: false, error: "missing expression after diff" };
-    return {
-      ok: true,
-      req: { expr, op: "diff", args: { var: v } },
-      pretty: `d/d${v} [ ${expr} ]`,
-    };
-  }
+  // d/dx alone -> diff with var, expr from active
+  m = input.match(/^d\/d([a-zA-Z])\s*$/i);
+  if (m) return makeOpReq("diff", undefined, m[1]);
 
-  // simplify <expr>
-  m = input.match(/^simplify\s+(.+)$/i);
-  if (m) {
-    return {
-      ok: true,
-      req: { expr: m[1].trim(), op: "simplify" },
-      pretty: `simplify( ${m[1].trim()} )`,
-    };
-  }
+  // <op> <rest?>
+  const opMatch = input.match(/^(integrate|∫|int|diff|derivative|simplify|factor|expand|solve)\b\s*(.*)$/i);
+  if (opMatch) {
+    const opWord = opMatch[1].toLowerCase();
+    const rest = opMatch[2].trim();
 
-  // factor <expr>
-  m = input.match(/^factor\s+(.+)$/i);
-  if (m) {
-    return {
-      ok: true,
-      req: { expr: m[1].trim(), op: "factor" },
-      pretty: `factor( ${m[1].trim()} )`,
-    };
-  }
+    const op: Op =
+      opWord === "∫" || opWord === "int" || opWord === "integrate"
+        ? "integrate"
+        : opWord === "diff" || opWord === "derivative"
+          ? "diff"
+          : (opWord as Op);
 
-  // expand <expr>
-  m = input.match(/^expand\s+(.+)$/i);
-  if (m) {
-    return {
-      ok: true,
-      req: { expr: m[1].trim(), op: "expand" },
-      pretty: `expand( ${m[1].trim()} )`,
-    };
-  }
+    if (!rest) {
+      // op alone — apply to active output
+      return makeOpReq(op, undefined, undefined);
+    }
 
-  // solve <expr> [for <var>]
-  m = input.match(/^solve\s+(.+?)(?:\s+for\s+([a-zA-Z]))?\s*$/i);
-  if (m) {
-    const expr = m[1].trim();
-    const v = m[2] ?? "x";
-    return {
-      ok: true,
-      req: { expr, op: "solve", args: { var: v } },
-      pretty: `solve( ${expr} = 0, ${v} )`,
-    };
+    // op + rest — does rest contain just a var directive ("dx", "for x") with no expression?
+    const onlyVar = trailingVar(rest);
+    if (onlyVar) return makeOpReq(op, undefined, onlyVar);
+
+    // op + expression (+ trailing var hint)
+    if (op === "integrate" || op === "diff") {
+      const { expr, var: v } = trimDx(rest);
+      if (!expr) return { ok: false, error: `missing expression after ${op}` };
+      return makeOpReq(op, expr, v);
+    }
+    if (op === "solve") {
+      const { expr, var: v } = trimForVar(rest);
+      if (!expr) return { ok: false, error: "missing expression after solve" };
+      return makeOpReq(op, expr, v);
+    }
+    // simplify / factor / expand
+    return makeOpReq(op, rest, undefined);
   }
 
   return {
     ok: false,
-    error: `Couldn't parse "${input}". Try: integrate x*sin(x) dx, d/dx x**2, simplify ..., factor ..., expand ..., solve ...`,
+    error: `Couldn't parse "${input}". Try: integrate x*sin(x) dx · simplify · factor x**2-1 · solve for x`,
   };
 }

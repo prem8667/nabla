@@ -112,13 +112,13 @@ function Message({ m }: { m: ChatMessage }) {
 function Hint() {
   const examples = [
     "integrate x*sin(x) dx",
-    "d/dx exp(x)*x**2",
-    "factor x**2 + 2*x*y + y**2",
+    "factor x**3 - x",
     "simplify sin(x)**2 + cos(x)**2",
-    "solve x**3 - 6*x**2 + 11*x - 6 for x",
+    "solve x**2 - 5*x + 6 for x",
   ];
+  const chain = ["integrate x*exp(x) dx", "diff", "simplify"];
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="text-sm" style={{ color: "var(--text-dim)" }}>
         Try a command:
       </div>
@@ -133,8 +133,22 @@ function Hint() {
           </div>
         ))}
       </div>
-      <div className="pt-2 text-[11px] leading-relaxed" style={{ color: "var(--text-dim)" }}>
-        V0 is command-based — V1 wires an LLM here so you can describe what you want in natural language.
+      <div className="space-y-1 pt-1">
+        <div className="text-[11px] uppercase tracking-widest" style={{ color: "var(--text-dim)" }}>
+          chain: op-only uses previous output
+        </div>
+        {chain.map((e, i) => (
+          <div
+            key={e}
+            className="rounded-md px-3 py-2 font-mono text-xs"
+            style={{ background: "var(--pane-2)", color: "var(--text)", border: "1px solid var(--border)" }}
+          >
+            {i + 1}. {e}
+          </div>
+        ))}
+      </div>
+      <div className="pt-1 text-[11px] leading-relaxed" style={{ color: "var(--text-dim)" }}>
+        Or click any chip under the board to apply that move. V1 will replace this with an LLM that takes natural language.
       </div>
     </div>
   );
