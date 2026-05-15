@@ -69,7 +69,14 @@ Later domains (V2+): linear algebra, ODEs, chemistry equation balancing, classic
 
 ## Status
 
-Very early — design phase, scaffolding underway. Not yet runnable.
+V0.1 — a working calculus workbench you can drive end-to-end with chips and structured commands. No LLM yet (that's V1, next up).
+
+## Docs
+
+- **[docs/USAGE.md](./docs/USAGE.md)** — how to run it, what every piece of the UI means, every command you can type, the data flow.
+- **[docs/WHATS-BUILT.md](./docs/WHATS-BUILT.md)** — plain-English log of what each commit added.
+- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — design decisions and the V1 data model.
+- **[docs/LLM-PLAN.md](./docs/LLM-PLAN.md)** — the plan for adding Claude Sonnet 4.6 in V1.
 
 If the vision resonates and you want to help, open an issue or a discussion.
 
