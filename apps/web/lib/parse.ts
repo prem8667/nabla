@@ -72,6 +72,12 @@ function prettify(op: Op, expr: string, v: string | undefined): string {
       return `expand( ${expr} )`;
     case "solve":
       return `solve( ${expr} = 0, ${sym} )`;
+    case "limit":
+      return `lim ${sym}→? [ ${expr} ]`;
+    case "series":
+      return `series( ${expr} )  at ${sym}=0`;
+    case "summation":
+      return `Σ ${expr}  (${sym})`;
   }
 }
 

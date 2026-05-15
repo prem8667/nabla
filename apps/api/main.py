@@ -48,8 +48,19 @@ _anthropic_client: Anthropic | None = Anthropic(api_key=_anthropic_key) if _anth
 SYSTEM_PROMPT = """You are Nabla, a math-derivation assistant. The user is a researcher working through a derivation on a three-pane workspace; the middle pane shows their currently active expression.
 
 Your job: turn each user message into exactly ONE tool call.
-- Use `apply_transform` when the user wants a symbolic operation on an expression.
-- Use `ask_clarification` only when the input genuinely cannot be turned into a transform.
+- Use `apply_transform` whenever there is ANY reasonable interpretation of the user's input as a math operation. This is the default.
+- Use `ask_clarification` only as a true last resort, when no reasonable starting expression exists.
+
+PREFER ACTION OVER QUESTIONS:
+- When the user names a TECHNIQUE, METHOD, THEOREM, or TOPIC (Fermat's tangent method, partial fractions, integration by parts, l'Hôpital's rule, Taylor series, chain rule, product rule, geometric series, etc.) without specifying an expression: commit to a CANONICAL EXAMPLE and apply the first natural step. Use the explanation field to say what canonical example you chose and what step you're applying. Examples:
+    - "Fermat's tangent method" → diff on x**2 (canonical example for tangent slopes)
+    - "integration by parts" → integrate on x*sin(x)
+    - "l'Hôpital's rule" → limit of sin(x)/x as x→0
+    - "Taylor series" → series on sin(x) at x0=0
+    - "geometric series" → summation of x**n from n=0 to oo
+    - "partial fractions" → integrate on 1/(x*(x-1)) or factor that denominator first
+- When the user says "let's do a derivation" or "where do I start" without specifying: commit to a SMALL, ICONIC canonical problem (e.g. integrate x*sin(x), or diff x**2) and apply the first step. Use the explanation to invite the user to pick a different example if they want.
+- Asking "which function would you like?" is almost always WORSE than picking one. The user can pivot in their next turn.
 
 Hard rules:
 - ALWAYS emit exactly one tool call. Never produce a plain text answer. Never write math in prose. SymPy will do the computation.
@@ -57,15 +68,18 @@ Hard rules:
 - When the user means "apply this to what is on the board" (e.g. "simplify that", "now differentiate it", "factor the result"), OMIT `expr`. The backend will use the active step's output.
 - When the user introduces a fresh expression, PROVIDE `expr`.
 - `var` is optional. Provide it only when the user names a variable, or when more than one symbol is present and the choice would otherwise be ambiguous.
-- `explanation` is one or two short sentences a researcher would find useful — say *why* this move makes sense for the current state, not how to do it.
+- `explanation` is one or two short sentences a researcher would find useful — say *why* this move makes sense for the current state, not how to do it. When you committed to a canonical example, say so briefly.
 
 Supported ops:
-- integrate (var optional)
-- diff (var optional)
+- integrate (var; e.g. var='x')
+- diff (var)
 - simplify
 - factor
 - expand
-- solve (var optional; treats the expression as `expr = 0`)
+- solve (var; treats expr as `expr = 0`)
+- limit (var; args.point = where var approaches, e.g. 0 or 'oo'; args.direction = '+'/'-'/'+-')
+- series (var; args.x0 = expansion point default 0; args.n = truncation order default 6)
+- summation (var; args.from = lower bound default 0; args.to = upper bound default 'oo')
 
 If the user's request maps to multiple ops in sequence (e.g. "find the integral and then simplify it"), pick the FIRST step only. The user can chain further with another turn or a chip click.
 """
@@ -79,8 +93,25 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "op": {
                     "type": "string",
-                    "enum": ["integrate", "diff", "simplify", "factor", "expand", "solve"],
-                    "description": "Which operation to apply.",
+                    "enum": [
+                        "integrate",
+                        "diff",
+                        "simplify",
+                        "factor",
+                        "expand",
+                        "solve",
+                        "limit",
+                        "series",
+                        "summation",
+                    ],
+                    "description": (
+                        "Which operation to apply. "
+                        "integrate/diff: needs var. "
+                        "solve: needs var; treats expr as `expr = 0`. "
+                        "limit: takes expr → as var approaches a point. "
+                        "series: Taylor/Maclaurin series expansion. "
+                        "summation: sum of expr over var from lower to upper bound."
+                    ),
                 },
                 "expr": {
                     "type": "string",
@@ -88,7 +119,18 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "var": {
                     "type": "string",
-                    "description": "Variable name (e.g. 'x'). Only needed for integrate/diff/solve when not obvious from context.",
+                    "description": "Variable name (e.g. 'x'). Used by integrate, diff, solve, limit, series, summation. Optional when obvious from context.",
+                },
+                "args": {
+                    "type": "object",
+                    "description": (
+                        "Op-specific arguments. Keys vary by op:\n"
+                        "  - limit: {point: number/string-symbol (default 0), direction: '+'/'-'/'+-' (default '+-')}\n"
+                        "  - series: {x0: number-or-symbol (default 0), n: integer truncation order (default 6)}\n"
+                        "  - summation: {from: number (default 0), to: number or 'oo' (default 'oo')}\n"
+                        "  - other ops: usually no args needed; var is at top level."
+                    ),
+                    "additionalProperties": True,
                 },
                 "explanation": {
                     "type": "string",
@@ -172,7 +214,17 @@ class LlmStatus(BaseModel):
 
 # ─── SymPy helpers ───────────────────────────────────────────────────────────
 
-SUPPORTED_OPS = {"integrate", "diff", "simplify", "factor", "expand", "solve"}
+SUPPORTED_OPS = {
+    "integrate",
+    "diff",
+    "simplify",
+    "factor",
+    "expand",
+    "solve",
+    "limit",
+    "series",
+    "summation",
+}
 
 
 def _sympify(s: str) -> sympy.Expr:
@@ -223,6 +275,27 @@ def _apply_op(expr_str: str, op: str, args: dict[str, Any]) -> TransformResult:
         elif op == "solve":
             var = _symbol(args.get("var") or _primary_symbol(expr))
             result = sympy.solve(expr, var)
+        elif op == "limit":
+            var = _symbol(args.get("var") or _primary_symbol(expr))
+            point_raw = args.get("point", 0)
+            point = _sympify(str(point_raw)) if not isinstance(point_raw, sympy.Expr) else point_raw
+            direction = args.get("direction", "+-")  # "+", "-", or "+-"
+            if direction not in ("+", "-", "+-"):
+                direction = "+-"
+            result = sympy.limit(expr, var, point, direction)
+        elif op == "series":
+            var = _symbol(args.get("var") or _primary_symbol(expr))
+            x0_raw = args.get("x0", 0)
+            x0 = _sympify(str(x0_raw)) if not isinstance(x0_raw, sympy.Expr) else x0_raw
+            n = int(args.get("n", 6))
+            result = sympy.series(expr, var, x0, n).removeO()
+        elif op == "summation":
+            var = _symbol(args.get("var") or _primary_symbol(expr))
+            a_raw = args.get("from", 0)
+            b_raw = args.get("to", "oo")
+            a = _sympify(str(a_raw)) if not isinstance(a_raw, sympy.Expr) else a_raw
+            b = _sympify(str(b_raw)) if not isinstance(b_raw, sympy.Expr) else b_raw
+            result = sympy.summation(expr, (var, a, b))
         else:
             raise HTTPException(status_code=500, detail="op dispatch broken")
     except HTTPException:
@@ -293,6 +366,13 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
 
     if has_trig or has_exp_log:
         suggestions.append(Suggestion(op="simplify", label="simplify"))
+        suggestions.append(
+            Suggestion(
+                op="series",
+                label=f"Taylor series in {var} at 0",
+                args={"var": var, "x0": 0, "n": 6},
+            )
+        )
 
     seen: set[tuple[str, str]] = set()
     unique: list[Suggestion] = []
@@ -418,9 +498,12 @@ def chat_turn(req: ChatTurnRequest) -> ChatTurnResponse:
                 message="The board is empty — could you give me an expression to start with?",
             )
 
-        args: dict[str, Any] = {"var": var} if var else {}
+        # Merge top-level var with the op-specific args dict from the LLM.
+        merged_args: dict[str, Any] = dict(tool_input.get("args") or {})
+        if var:
+            merged_args["var"] = var
         try:
-            result = _apply_op(expr_to_use, op, args)
+            result = _apply_op(expr_to_use, op, merged_args)
         except HTTPException as e:
             return ChatTurnResponse(
                 kind="error",

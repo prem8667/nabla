@@ -125,6 +125,40 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 6 — V1.1: limit, series, summation + more decisive LLM
+
+**The intent:** The first user session exposed two real bugs in V1: (1) Nabla didn't have enough ops to handle classic calculus derivations like Fermat's tangent method (which needs `limit`), and (2) the LLM kept asking "which function would you like?" instead of committing to a canonical example when the user named a method or technique.
+
+**Backend (`apps/api/main.py`):**
+- Three new ops in `_apply_op`:
+  - `limit(expr, var, point, direction)` — args: `var`, `args.point`, `args.direction` (`+`/`-`/`+-`)
+  - `series(expr, var, x0, n)` — args: `var`, `args.x0`, `args.n` (truncation order)
+  - `summation(expr, (var, a, b))` — args: `var`, `args.from`, `args.to`
+- Tool schema updated: op enum now has 9 entries; new optional `args` dict at the tool input level documents which keys go with which op.
+- Backend merges top-level `var` from tool input with `args` dict so both styles work.
+- System prompt rewritten with a "PREFER ACTION OVER QUESTIONS" section:
+  - When the user names a method/technique without an expression, commit to a canonical example (Fermat's tangent method → diff on x², l'Hôpital's → limit of sin(x)/x, Taylor series → series on sin(x) at 0, geometric series → summation of x^n, partial fractions → integrate on 1/(x(x-1))).
+  - "Asking which function would you like?" is almost always WORSE than picking one.
+  - Use the `explanation` field to say which canonical example was picked.
+- `/suggest` now offers Taylor series as a chip when the expression has trig or exp/log.
+
+**Frontend (`apps/web/`):**
+- `Op` union includes `limit`, `series`, `summation`.
+- `prettifyPretty` in `page.tsx` and `prettify` in `lib/parse.ts` render the new ops as `lim x→? [ … ]`, `series( … ) at x=0`, `Σ … (x)`.
+
+**Verified working:**
+- `lim x→0 sin(x)/x = 1` (classic limit)
+- Taylor series of `exp(x)` at 0, order 5 → `x⁴/24 + x³/6 + x²/2 + x + 1`
+- `Σ 1/n² from n=1 to ∞ = π²/6` (Basel problem)
+- Series chip appears for trig/exp/log expressions
+
+**Caveat:**
+- The LLM-level test for "Fermat's tangent method" couldn't run during this commit because the Anthropic credit balance was empty (the funded $10 hadn't applied yet, or the funding step in the console hadn't completed). All three new ops still work end-to-end via direct `/transform`, chips, and the regex fallback — only the natural-language path is currently affected, and only until credits land.
+
+---
+
 ## What this gives you today
 
-A working calculus workbench where you can talk to it like a real assistant. You can describe a problem in natural language, follow up by saying "now do X to that," and Claude figures out the right symbolic op while SymPy actually does the math. The DAG of past steps and the chip-driven future moves still work exactly as before — the LLM just sits where the regex parser used to.
+A real symbolic math workbench. Calculus derivations that touch limits, Taylor expansions, and summations now work alongside the original integrate/diff/factor/etc. The LLM is more decisive — it picks canonical examples when you describe a method instead of pestering you for specifics. The DAG, the chips, the timeline, the breadcrumb all work the same as before.

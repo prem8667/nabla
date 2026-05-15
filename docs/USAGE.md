@@ -203,9 +203,9 @@ If SymPy can't parse the expression or the op fails, the backend returns HTTP 40
 
 ---
 
-## 7. Operations supported in V0.1
+## 7. Operations supported
 
-| Op | What it does | Required args |
+| Op | What it does | Args |
 |---|---|---|
 | `integrate` | Indefinite integral | `var` (defaults to detected primary symbol) |
 | `diff` | Derivative | `var` (defaults to detected primary symbol) |
@@ -213,8 +213,13 @@ If SymPy can't parse the expression or the op fails, the backend returns HTTP 40
 | `factor` | Factor as a polynomial | none |
 | `expand` | Algebraic expansion | none |
 | `solve` | Solve `expr = 0` | `var` |
+| `limit` | Limit as `var → point` | `var`, `args.point` (default 0), `args.direction` (`'+'`/`'-'`/`'+-'`) |
+| `series` | Taylor / Maclaurin expansion | `var`, `args.x0` (default 0), `args.n` (truncation order, default 6) |
+| `summation` | Sum of expr over var | `var`, `args.from` (default 0), `args.to` (default `'oo'` for infinity) |
 
 The "primary symbol" detection picks `x` if present, otherwise `y`, `t`, `z`, then whichever symbol is alphabetically first.
+
+You almost never need to pass `args` by hand — the LLM and chip suggestions fill them in. They're documented here so you know what's possible.
 
 ---
 

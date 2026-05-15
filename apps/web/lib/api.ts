@@ -1,4 +1,13 @@
-export type Op = "integrate" | "diff" | "simplify" | "factor" | "expand" | "solve";
+export type Op =
+  | "integrate"
+  | "diff"
+  | "simplify"
+  | "factor"
+  | "expand"
+  | "solve"
+  | "limit"
+  | "series"
+  | "summation";
 
 export type TransformRequest = {
   expr: string;
