@@ -196,6 +196,45 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 8 — V1.3: persistence, welcome state, hover preview, branch connectors, +3 ops
+
+**The intent:** Close every shipping gap from the mission/vision comparison except the per-term hover-history (which needs a serious SymPy step-by-step engine and is V2). This commit ships persistence, broader op coverage, the in-app welcome onboarding, hover previews on timeline nodes, and visible branch connectors.
+
+**Backend (`apps/api/main.py`):**
+- Three new ops: `trigsimp`, `apart`, `dsolve`.
+  - `trigsimp(expr)` — trig-identity-aware simplification. Demonstrates: `sin²x + 2sin·cos + cos²x → sin(2x) + 1`.
+  - `apart(expr, var)` — partial-fraction decomposition. Demonstrates: `(x+1)/((x-1)(x-2)) → -2/(x-1) + 3/(x-2)`.
+  - `dsolve(expr=0, f(x))` — solves first-order ODEs in the form `expr=0` where the unknown is `f(x)`. Demonstrates: `f'(x) - f(x) = 0 → f(x) = C₁eˣ`.
+- Op enum now contains 12 entries; system prompt documents each with arg shapes.
+
+**Frontend (`apps/web/`):**
+- **Session persistence (`lib/storage.ts`)** — versioned JSON snapshot of `{steps, activeId, messages, scratch}` in localStorage. Restored on mount, saved on every state change after restoration. A schema version field means future incompatible changes can ignore old saves instead of crashing.
+- **"New session" button** in the chat-pane header. Confirms before clearing.
+- **Lifted scratchpad state** to the root page so it persists with the rest of the session.
+- **Welcome state on the empty board** — a real onboarding panel:
+  - Big ∇ logo
+  - "Welcome to Nabla" + one-line description
+  - Three-step "How it works" card explaining the pane model
+  - 4 clickable example cards that auto-submit (integration by parts, polynomial roots, l'Hôpital, trig identity)
+  - LLM-off banner if the key isn't set, pointing at structured-command syntax
+- **Hover preview** on timeline steps — when you hover any past step, a 18rem card pops in showing input → output, the LLM's explanation, and the timestamp. Disappears when the active step is hovered (no point previewing what you're already looking at).
+- **Visual branch connectors** — the timeline now has a vertical spine line plus horizontal hairline stubs from spine to each step button. Forked branches get an accent-tinted connector. Tree shape is unambiguous instead of guessed-by-indent.
+- **Active-step explanation rendering** — the LLM's prose explanation now shows below the equation on the board (not just in chat), so the board itself tells you what move was applied and why.
+- New ops integrated into `Op` union, `prettifyPretty`, and the structured-command parser's prettify function.
+
+**Verified — full 28-case test suite:**
+- All 12 direct ops compute correct SymPy results.
+- `/suggest` returns expected chips for polynomial and exp/log shapes.
+- `/llm-status` reports OpenAI gpt-5-mini configured.
+- 12 LLM scenarios pass, including:
+  - Natural-language trig rewrite → LLM picks `trigsimp`.
+  - "Decompose (x+1)/((x-1)(x-2)) using partial fractions" → LLM picks `apart`, correct result.
+  - "Solve the ODE f prime of x equals f of x" → LLM picks `dsolve`, returns `f(x) = C₁eˣ`.
+
+---
+
 ## What this gives you today
 
-A real symbolic math workbench. Calculus derivations that touch limits, Taylor expansions, and summations work alongside the original ops. The LLM is more decisive — picks canonical examples when you describe a method. The DAG, the chips, the timeline, the breadcrumb all work the same as before. Cost per chat turn is ~12× cheaper than the previous Claude Sonnet setup, with comparable behavior on our schema.
+Real-feeling research workbench. Sessions survive refresh. First-time users land on a welcome state that explains the layout and offers one-click starting points. Hovering past steps reveals what they were without losing your current focus. Branch structure is visible, not implied. Twelve ops cover most of an undergrad calculus + algebra + ODE curriculum. Almost every item from the original mission is shipped — only per-term hover-history remains as a future feature.

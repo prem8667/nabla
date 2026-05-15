@@ -216,6 +216,9 @@ If SymPy can't parse the expression or the op fails, the backend returns HTTP 40
 | `limit` | Limit as `var → point` | `var`, `args.point` (default 0), `args.direction` (`'+'`/`'-'`/`'+-'`) |
 | `series` | Taylor / Maclaurin expansion | `var`, `args.x0` (default 0), `args.n` (truncation order, default 6) |
 | `summation` | Sum of expr over var | `var`, `args.from` (default 0), `args.to` (default `'oo'` for infinity) |
+| `trigsimp` | Trig-identity-aware simplification | none |
+| `apart` | Partial-fraction decomposition | `var` |
+| `dsolve` | Solve ODE (form `expr = 0` in `f(x)`) | `args.func` (default `'f'`), `var` (default `'x'`) |
 
 The "primary symbol" detection picks `x` if present, otherwise `y`, `t`, `z`, then whichever symbol is alphabetically first.
 

@@ -88,6 +88,9 @@ Supported ops:
 - limit (var; args.point = where var approaches, e.g. 0 or 'oo'; args.direction = '+'/'-'/'+-')
 - series (var; args.x0 = expansion point default 0; args.n = truncation order default 6)
 - summation (var; args.from = lower bound default 0; args.to = upper bound default 'oo')
+- trigsimp (no extra args; simplifies trig identities specifically)
+- apart (var; partial-fractions decomposition of a rational function)
+- dsolve (args.func default 'f', args.var default 'x'; expr should be the ODE's LHS using e.g. `Derivative(f(x), x) - f(x)` set to zero)
 
 If the user's request maps to multiple ops in sequence (e.g. "find the integral and then simplify it"), pick the FIRST step only. The user can chain further with another turn or a chip click.
 """
@@ -114,6 +117,9 @@ TOOLS: list[dict[str, Any]] = [
                             "limit",
                             "series",
                             "summation",
+                            "trigsimp",
+                            "apart",
+                            "dsolve",
                         ],
                         "description": (
                             "Which operation to apply. "
@@ -239,6 +245,9 @@ SUPPORTED_OPS = {
     "limit",
     "series",
     "summation",
+    "trigsimp",
+    "apart",
+    "dsolve",
 }
 
 
@@ -311,6 +320,25 @@ def _apply_op(expr_str: str, op: str, args: dict[str, Any]) -> TransformResult:
             a = _sympify(str(a_raw)) if not isinstance(a_raw, sympy.Expr) else a_raw
             b = _sympify(str(b_raw)) if not isinstance(b_raw, sympy.Expr) else b_raw
             result = sympy.summation(expr, (var, a, b))
+        elif op == "trigsimp":
+            result = sympy.trigsimp(expr)
+        elif op == "apart":
+            var = _symbol(args.get("var") or _primary_symbol(expr))
+            result = sympy.apart(expr, var)
+        elif op == "dsolve":
+            # Treat `expr` as the LHS of an ODE in the form `expr = 0`,
+            # where the unknown function is `f(x)`. Caller passes args.func
+            # (default 'f') and args.var (default 'x').
+            fname = str(args.get("func", "f"))
+            vname = str(args.get("var") or "x")
+            x = sympy.Symbol(vname)
+            f = sympy.Function(fname)
+            # Replace bare `f` references in the expression with `f(x)` if needed —
+            # but the safer pattern is for the caller to write the equation using
+            # `f(x)`, `Derivative(f(x), x)`, etc. We just re-sympify with f known.
+            local: dict[str, Any] = {fname: f, vname: x}
+            eq_expr = sympy.sympify(expr_str, locals=local)
+            result = sympy.dsolve(eq_expr, f(x))
         else:
             raise HTTPException(status_code=500, detail="op dispatch broken")
     except HTTPException:

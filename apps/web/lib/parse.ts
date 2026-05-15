@@ -78,6 +78,12 @@ function prettify(op: Op, expr: string, v: string | undefined): string {
       return `series( ${expr} )  at ${sym}=0`;
     case "summation":
       return `Σ ${expr}  (${sym})`;
+    case "trigsimp":
+      return `trigsimp( ${expr} )`;
+    case "apart":
+      return `apart( ${expr}, ${sym} )`;
+    case "dsolve":
+      return `dsolve( ${expr} )`;
   }
 }
 

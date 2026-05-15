@@ -7,7 +7,10 @@ export type Op =
   | "solve"
   | "limit"
   | "series"
-  | "summation";
+  | "summation"
+  | "trigsimp"
+  | "apart"
+  | "dsolve";
 
 export type TransformRequest = {
   expr: string;

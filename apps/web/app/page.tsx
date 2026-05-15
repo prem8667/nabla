@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardPane, type Step } from "@/components/BoardPane";
 import { ChatPane, type ChatUiMessage } from "@/components/ChatPane";
 import { ScratchPane } from "@/components/ScratchPane";
@@ -14,6 +14,7 @@ import {
   type Suggestion,
 } from "@/lib/api";
 import { parseCommand } from "@/lib/parse";
+import { clearSnapshot, loadSnapshot, saveSnapshot } from "@/lib/storage";
 
 let _idCounter = 0;
 const nextId = () => `s${++_idCounter}_${Date.now().toString(36)}`;
@@ -22,20 +23,39 @@ export default function Home() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatUiMessage[]>([]);
+  const [scratch, setScratch] = useState<string>("");
   const [pending, setPending] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
+  const [restored, setRestored] = useState(false);
 
   const activeStep = steps.find((s) => s.id === activeId) ?? null;
 
-  // Probe the backend once on load so we can show a banner if the LLM is off
+  // ── Restore on mount, save on every relevant change ────────────────
+  useEffect(() => {
+    const snap = loadSnapshot();
+    if (snap) {
+      setSteps(snap.steps);
+      setActiveId(snap.activeId);
+      setMessages(snap.messages);
+      setScratch(snap.scratch);
+    }
+    setRestored(true);
+  }, []);
+
+  useEffect(() => {
+    if (!restored) return;
+    saveSnapshot({ steps, activeId, messages, scratch });
+  }, [restored, steps, activeId, messages, scratch]);
+
+  // ── LLM availability probe ──────────────────────────────────────────
   useEffect(() => {
     llmStatus()
       .then((s) => setLlmReady(s.configured))
       .catch(() => setLlmReady(false));
   }, []);
 
-  /** Refresh future-moves chips for the active step's output. */
+  // ── Refresh chips for the active step ──────────────────────────────
   useEffect(() => {
     if (!activeStep) {
       setSuggestions([]);
@@ -54,10 +74,12 @@ export default function Home() {
     };
   }, [activeStep?.id, activeStep?.outputSympy]);
 
+  // ── Core transform helpers ─────────────────────────────────────────
   const addStep = useCallback(
     (params: {
       op: string;
       pretty: string;
+      explanation?: string;
       result: { input_latex: string; output_latex: string; output_sympy: string };
       parentId: string | null;
     }) => {
@@ -69,6 +91,7 @@ export default function Home() {
         outputSympy: params.result.output_sympy,
         op: params.op,
         pretty: params.pretty,
+        explanation: params.explanation,
         createdAt: Date.now(),
       };
       setSteps((prev) => [...prev, step]);
@@ -78,7 +101,6 @@ export default function Home() {
     [],
   );
 
-  /** Direct transform call — used by chip clicks and the regex fallback. */
   const runDirectTransform = useCallback(
     async (params: {
       op: Op;
@@ -91,14 +113,18 @@ export default function Home() {
       setPending(true);
       try {
         const res = await transform({ op: params.op, expr: params.expr, args: params.args });
-        addStep({ op: res.op, pretty: params.pretty, result: res, parentId: params.parentId });
+        addStep({
+          op: res.op,
+          pretty: params.pretty,
+          explanation: params.explanation,
+          result: res,
+          parentId: params.parentId,
+        });
         setMessages((m) => [
           ...m,
           {
             role: "assistant",
-            text:
-              params.explanation ??
-              `${params.pretty}  =  ${res.output_sympy}`,
+            text: params.explanation ?? `${params.pretty}  =  ${res.output_sympy}`,
           },
         ]);
       } catch (e) {
@@ -111,7 +137,6 @@ export default function Home() {
     [addStep],
   );
 
-  /** Try the regex parser. Returns true if it handled the input. */
   const tryRegexFallback = useCallback(
     async (raw: string, useActive: Step | null): Promise<boolean> => {
       const parsed = parseCommand(raw);
@@ -132,11 +157,15 @@ export default function Home() {
     [runDirectTransform],
   );
 
+  // Keep a ref to the latest values so handlers don't need to be re-bound on every keystroke
+  const stateRef = useRef({ activeStep, messages, llmReady });
+  stateRef.current = { activeStep, messages, llmReady };
+
   const handleSubmit = useCallback(
     async (raw: string) => {
+      const { activeStep, messages, llmReady } = stateRef.current;
       setMessages((m) => [...m, { role: "user", text: raw }]);
 
-      // 1. Try the LLM first when configured
       if (llmReady) {
         setPending(true);
         try {
@@ -161,7 +190,13 @@ export default function Home() {
               res.expr_used && res.expr_used !== activeStep?.outputSympy
                 ? null
                 : activeStep?.id ?? null;
-            addStep({ op: res.transform.op, pretty, result: res.transform, parentId });
+            addStep({
+              op: res.transform.op,
+              pretty,
+              explanation: res.message,
+              result: res.transform,
+              parentId,
+            });
             setMessages((m) => [
               ...m,
               { role: "assistant", text: res.message || `${pretty}  =  ${res.transform!.output_sympy}` },
@@ -176,7 +211,6 @@ export default function Home() {
             return;
           }
 
-          // res.kind === "error" — fall through to regex fallback
           setMessages((m) => [
             ...m,
             { role: "system", text: `LLM unavailable: ${res.message}. Trying structured-command parser…`, isError: true },
@@ -192,7 +226,6 @@ export default function Home() {
         }
       }
 
-      // 2. Fallback: regex parser
       const handled = await tryRegexFallback(raw, activeStep);
       if (!handled) {
         setMessages((m) => [
@@ -209,7 +242,7 @@ export default function Home() {
         ]);
       }
     },
-    [activeStep, addStep, llmReady, messages, tryRegexFallback],
+    [addStep, tryRegexFallback],
   );
 
   const handlePickSuggestion = useCallback(
@@ -231,6 +264,19 @@ export default function Home() {
     [activeStep, runDirectTransform],
   );
 
+  const handleNewSession = useCallback(() => {
+    if (steps.length > 0 || messages.length > 0 || scratch.length > 0) {
+      const ok = window.confirm("Clear the current session? This deletes the timeline, chat, and scratch.");
+      if (!ok) return;
+    }
+    clearSnapshot();
+    setSteps([]);
+    setActiveId(null);
+    setMessages([]);
+    setScratch("");
+    setSuggestions([]);
+  }, [steps.length, messages.length, scratch.length]);
+
   return (
     <main className="grid h-screen w-screen grid-cols-[20rem_minmax(0,1fr)_18rem]">
       <ChatPane
@@ -238,6 +284,7 @@ export default function Home() {
         onSubmit={handleSubmit}
         pending={pending}
         llmReady={llmReady}
+        onNewSession={handleNewSession}
       />
       <div className="border-l border-r" style={{ borderColor: "var(--border)" }}>
         <BoardPane
@@ -247,9 +294,11 @@ export default function Home() {
           suggestions={suggestions}
           onPickSuggestion={handlePickSuggestion}
           pending={pending}
+          onSubmitExample={handleSubmit}
+          llmReady={llmReady}
         />
       </div>
-      <ScratchPane />
+      <ScratchPane value={scratch} onChange={setScratch} />
     </main>
   );
 }
@@ -275,6 +324,12 @@ function prettifyPretty(op: string, expr: string, varName: string | null | undef
       return `series( ${expr} )  at ${sym}=0`;
     case "summation":
       return `Σ ${expr}  (${sym})`;
+    case "trigsimp":
+      return `trigsimp( ${expr} )`;
+    case "apart":
+      return `apart( ${expr}, ${sym} )`;
+    case "dsolve":
+      return `dsolve( ${expr} )`;
     default:
       return `${op}( ${expr} )`;
   }

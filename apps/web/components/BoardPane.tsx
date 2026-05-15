@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Suggestion } from "@/lib/api";
 import { Equation } from "./Equation";
 import { SuggestChips } from "./SuggestChips";
@@ -13,7 +14,15 @@ export type Step = {
   op: string;
   pretty: string;
   createdAt: number;
+  explanation?: string;
 };
+
+const WELCOME_EXAMPLES = [
+  { label: "Integration by parts", text: "find the integral of x times sin x" },
+  { label: "Polynomial roots", text: "solve x cubed minus 6 x squared plus 11 x minus 6 for x" },
+  { label: "l'Hôpital's rule", text: "what is the limit of sin x over x as x approaches zero" },
+  { label: "Trig identity", text: "simplify sin x squared plus cos x squared" },
+];
 
 export function BoardPane({
   steps,
@@ -22,6 +31,8 @@ export function BoardPane({
   suggestions,
   onPickSuggestion,
   pending,
+  onSubmitExample,
+  llmReady,
 }: {
   steps: Step[];
   activeId: string | null;
@@ -29,9 +40,14 @@ export function BoardPane({
   suggestions: Suggestion[];
   onPickSuggestion: (s: Suggestion) => void;
   pending: boolean;
+  onSubmitExample: (text: string) => void;
+  llmReady: boolean | null;
 }) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+
   const active = steps.find((s) => s.id === activeId) ?? steps[steps.length - 1] ?? null;
   const ancestors = active ? ancestorPath(steps, active.id) : [];
+  const hovered = hoveredId ? steps.find((s) => s.id === hoveredId) ?? null : null;
 
   return (
     <div className="flex h-full flex-col" style={{ background: "var(--pane)" }}>
@@ -42,12 +58,18 @@ export function BoardPane({
         <Breadcrumb path={ancestors} activeId={active?.id ?? null} onSelect={onSelect} />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <Timeline steps={steps} activeId={active?.id ?? null} onSelect={onSelect} />
+      <div className="relative flex flex-1 overflow-hidden">
+        <Timeline
+          steps={steps}
+          activeId={active?.id ?? null}
+          hoveredId={hoveredId}
+          onSelect={onSelect}
+          onHover={setHoveredId}
+        />
 
         <div className="flex flex-1 items-center justify-center overflow-auto p-8">
           {!active ? (
-            <Empty />
+            <Welcome onPick={onSubmitExample} pending={pending} llmReady={llmReady} />
           ) : (
             <div className="flex flex-col items-center gap-6">
               <ActiveStep step={active} />
@@ -59,6 +81,8 @@ export function BoardPane({
             </div>
           )}
         </div>
+
+        {hovered && hovered.id !== active?.id ? <HoverPreview step={hovered} /> : null}
       </div>
     </div>
   );
@@ -77,20 +101,147 @@ function ActiveStep({ step }: { step: Step }) {
       <div className="text-3xl">
         <Equation latex={step.outputLatex} />
       </div>
-      <div className="mt-2 text-xs font-mono" style={{ color: "var(--text-dim)" }}>
+      {step.explanation ? (
+        <div
+          className="mt-2 max-w-xl text-sm leading-relaxed"
+          style={{ color: "var(--text-dim)" }}
+        >
+          {step.explanation}
+        </div>
+      ) : null}
+      <div className="mt-1 text-xs font-mono" style={{ color: "var(--text-dim)" }}>
         {step.outputSympy}
       </div>
     </div>
   );
 }
 
-function Empty() {
+function Welcome({
+  onPick,
+  pending,
+  llmReady,
+}: {
+  onPick: (text: string) => void;
+  pending: boolean;
+  llmReady: boolean | null;
+}) {
   return (
-    <div className="text-center" style={{ color: "var(--text-dim)" }}>
-      <div className="text-6xl font-light" style={{ color: "var(--accent)" }}>
+    <div className="flex max-w-2xl flex-col items-center gap-6 text-center">
+      <div className="text-7xl font-light" style={{ color: "var(--accent)" }}>
         ∇
       </div>
-      <div className="mt-4 text-sm">The board is empty. Send a command from the chat to start.</div>
+      <div>
+        <div className="text-2xl font-semibold">Welcome to Nabla</div>
+        <div className="mt-1 text-sm" style={{ color: "var(--text-dim)" }}>
+          A whiteboard for math derivations. Chat on the left, the live equation here, scratch on the right.
+        </div>
+      </div>
+
+      <div
+        className="w-full rounded-lg p-4 text-left text-xs leading-relaxed"
+        style={{
+          background: "var(--pane-2)",
+          border: "1px solid var(--border)",
+          color: "var(--text-dim)",
+        }}
+      >
+        <div className="mb-2 text-[10px] uppercase tracking-widest" style={{ color: "var(--text-dim)" }}>
+          How it works
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <div className="font-semibold" style={{ color: "var(--text)" }}>1. Type or click</div>
+            <div className="mt-1">Pick an example below or write what you want to compute.</div>
+          </div>
+          <div>
+            <div className="font-semibold" style={{ color: "var(--text)" }}>2. Watch the board</div>
+            <div className="mt-1">Each move adds a step. Past states stay in the timeline on the left.</div>
+          </div>
+          <div>
+            <div className="font-semibold" style={{ color: "var(--text)" }}>3. Chain or branch</div>
+            <div className="mt-1">Click a chip to apply, or click an old step to fork a new path.</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="w-full">
+        <div
+          className="mb-2 text-[10px] uppercase tracking-widest"
+          style={{ color: "var(--text-dim)" }}
+        >
+          start with an example
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {WELCOME_EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              disabled={pending}
+              onClick={() => onPick(ex.text)}
+              className="rounded-md p-3 text-left text-sm disabled:opacity-40 hover:opacity-90"
+              style={{
+                background: "var(--pane-2)",
+                border: "1px solid var(--border)",
+                color: "var(--text)",
+              }}
+            >
+              <div className="text-xs uppercase tracking-widest" style={{ color: "var(--accent)" }}>
+                {ex.label}
+              </div>
+              <div className="mt-1 font-mono text-[11px]" style={{ color: "var(--text-dim)" }}>
+                {ex.text}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {llmReady === false ? (
+        <div
+          className="rounded-md px-3 py-2 text-xs"
+          style={{
+            background: "var(--pane-2)",
+            border: "1px solid var(--border)",
+            color: "var(--error)",
+          }}
+        >
+          LLM is off. These examples need natural-language input — use structured commands like{" "}
+          <span className="font-mono">integrate x*sin(x) dx</span> in the chat.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function HoverPreview({ step }: { step: Step }) {
+  return (
+    <div
+      className="pointer-events-none absolute left-24 top-4 w-72 rounded-lg p-3 shadow-2xl"
+      style={{
+        background: "var(--pane-2)",
+        border: "1px solid var(--border)",
+        zIndex: 20,
+      }}
+    >
+      <div
+        className="mb-2 text-[10px] uppercase tracking-widest"
+        style={{ color: "var(--text-dim)" }}
+      >
+        {step.op} · {new Date(step.createdAt).toLocaleTimeString()}
+      </div>
+      <div className="text-sm opacity-70">
+        <Equation latex={step.inputLatex} />
+      </div>
+      <div className="my-1 text-center text-xs" style={{ color: "var(--text-dim)" }}>
+        ↓
+      </div>
+      <div className="text-base">
+        <Equation latex={step.outputLatex} />
+      </div>
+      {step.explanation ? (
+        <div className="mt-2 text-[11px] leading-snug" style={{ color: "var(--text-dim)" }}>
+          {step.explanation}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -110,23 +261,37 @@ function ancestorPath(steps: Step[], leafId: string): Step[] {
 function Timeline({
   steps,
   activeId,
+  hoveredId,
   onSelect,
+  onHover,
 }: {
   steps: Step[];
   activeId: string | null;
+  hoveredId: string | null;
   onSelect: (id: string) => void;
+  onHover: (id: string | null) => void;
 }) {
   if (steps.length === 0) return null;
-
   const tree = buildTree(steps);
-
   return (
     <div
-      className="flex w-20 flex-col items-center gap-1 overflow-y-auto border-r py-3"
+      className="relative flex w-20 flex-col items-stretch overflow-y-auto border-r py-3"
       style={{ borderColor: "var(--border)", background: "var(--pane-2)" }}
     >
-      {tree.map((row) => (
-        <TimelineRow key={row.step.id} row={row} activeId={activeId} onSelect={onSelect} />
+      <div
+        className="pointer-events-none absolute bottom-0 left-[1.1rem] top-0 w-px"
+        style={{ background: "var(--border)" }}
+      />
+      {tree.map((row, i) => (
+        <TimelineRow
+          key={row.step.id}
+          row={row}
+          previousDepth={i > 0 ? tree[i - 1].depth : 0}
+          activeId={activeId}
+          hoveredId={hoveredId}
+          onSelect={onSelect}
+          onHover={onHover}
+        />
       ))}
     </div>
   );
@@ -135,14 +300,12 @@ function Timeline({
 type TreeRow = { step: Step; depth: number; siblingIndex: number };
 
 function buildTree(steps: Step[]): TreeRow[] {
-  // depth = distance from root; siblingIndex = nth child of its parent
   const childrenOf = new Map<string | null, Step[]>();
   for (const s of steps) {
     const arr = childrenOf.get(s.parentId) ?? [];
     arr.push(s);
     childrenOf.set(s.parentId, arr);
   }
-  // sort each sibling group by creation time so older branches stay on the left
   childrenOf.forEach((arr) => arr.sort((a, b) => a.createdAt - b.createdAt));
 
   const rows: TreeRow[] = [];
@@ -159,30 +322,58 @@ function buildTree(steps: Step[]): TreeRow[] {
 
 function TimelineRow({
   row,
+  previousDepth,
   activeId,
+  hoveredId,
   onSelect,
+  onHover,
 }: {
   row: TreeRow;
+  previousDepth: number;
   activeId: string | null;
+  hoveredId: string | null;
   onSelect: (id: string) => void;
+  onHover: (id: string | null) => void;
 }) {
   const { step, depth, siblingIndex } = row;
   const active = step.id === activeId;
+  const hovered = step.id === hoveredId;
   const branched = siblingIndex > 0;
+
   return (
-    <button
-      onClick={() => onSelect(step.id)}
-      title={step.pretty}
-      className="relative flex h-9 w-9 items-center justify-center rounded-full text-xs font-mono"
-      style={{
-        marginLeft: depth * 4,
-        background: active ? "var(--accent)" : "var(--pane)",
-        color: active ? "#0b0d12" : "var(--text-dim)",
-        border: `1px solid ${active ? "var(--accent)" : branched ? "var(--accent-dim)" : "var(--border)"}`,
-      }}
-    >
-      {step.op.slice(0, 3)}
-    </button>
+    <div className="relative my-0.5 flex items-center pr-1" style={{ paddingLeft: depth * 8 + 4 }}>
+      {/* Horizontal stub from spine to button */}
+      {depth > 0 ? (
+        <span
+          aria-hidden
+          className="absolute h-px"
+          style={{
+            left: "1.1rem",
+            width: `${Math.max(0, depth * 8 - 4)}px`,
+            top: "50%",
+            background: branched ? "var(--accent-dim)" : "var(--border)",
+          }}
+        />
+      ) : null}
+      <button
+        onClick={() => onSelect(step.id)}
+        onMouseEnter={() => onHover(step.id)}
+        onMouseLeave={() => onHover(null)}
+        title={step.pretty}
+        className="relative flex h-8 min-w-[2.25rem] items-center justify-center rounded-full px-2 text-[10px] font-mono"
+        style={{
+          background: active
+            ? "var(--accent)"
+            : hovered
+              ? "var(--pane)"
+              : "var(--pane-2)",
+          color: active ? "#0b0d12" : "var(--text-dim)",
+          border: `1px solid ${active ? "var(--accent)" : branched ? "var(--accent-dim)" : "var(--border)"}`,
+        }}
+      >
+        {step.op.slice(0, 3)}
+      </button>
+    </div>
   );
 }
 

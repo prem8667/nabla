@@ -12,11 +12,13 @@ export function ChatPane({
   onSubmit,
   pending,
   llmReady,
+  onNewSession,
 }: {
   messages: ChatUiMessage[];
   onSubmit: (text: string) => void;
   pending: boolean;
   llmReady: boolean | null;
+  onNewSession: () => void;
 }) {
   const [draft, setDraft] = useState("");
 
@@ -30,7 +32,7 @@ export function ChatPane({
   return (
     <div className="flex h-full flex-col" style={{ background: "var(--pane)" }}>
       <div
-        className="flex items-center justify-between border-b px-4 py-3"
+        className="flex items-center justify-between gap-2 border-b px-4 py-3"
         style={{ borderColor: "var(--border)" }}
       >
         <div
@@ -39,7 +41,21 @@ export function ChatPane({
         >
           CHAT
         </div>
-        <LlmIndicator status={llmReady} />
+        <div className="flex items-center gap-2">
+          <LlmIndicator status={llmReady} />
+          <button
+            onClick={onNewSession}
+            className="rounded-md px-2 py-0.5 text-[10px] uppercase tracking-widest"
+            style={{
+              border: "1px solid var(--border)",
+              color: "var(--text-dim)",
+              background: "transparent",
+            }}
+            title="Clear timeline, chat, and scratch"
+          >
+            new
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
