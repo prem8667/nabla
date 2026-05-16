@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Suggestion } from "@/lib/api";
+import { ConceptExplorer } from "./ConceptExplorer";
 import { Equation } from "./Equation";
 import { StepDetail } from "./StepDetail";
 import { SuggestChips } from "./SuggestChips";
@@ -47,6 +48,7 @@ export function BoardPane({
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [explore, setExplore] = useState<{ concept: string; context: string | null } | null>(null);
 
   const active = steps.find((s) => s.id === activeId) ?? steps[steps.length - 1] ?? null;
   const ancestors = active ? ancestorPath(steps, active.id) : [];
@@ -87,7 +89,10 @@ export function BoardPane({
                 onPick={onPickSuggestion}
                 pending={pending}
               />
-              <TermBreakdown sympyExpr={active.outputSympy} />
+              <TermBreakdown
+                sympyExpr={active.outputSympy}
+                onExplore={(concept, context) => setExplore({ concept, context })}
+              />
             </div>
           )}
         </div>
@@ -100,6 +105,14 @@ export function BoardPane({
             parent={detailParent}
             index={detailIndex}
             onClose={() => setDetailId(null)}
+          />
+        ) : null}
+
+        {explore ? (
+          <ConceptExplorer
+            rootConcept={explore.concept}
+            contextFormula={explore.context}
+            onClose={() => setExplore(null)}
           />
         ) : null}
       </div>

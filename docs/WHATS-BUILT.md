@@ -262,6 +262,35 @@ A running log of the work, in plain English. Each section corresponds to a commi
 
 ---
 
+---
+
+## Commit 10 — V1.5: `show` op + recursive drill-to-fundamentals
+
+**The intent:** First real usage exposed two gaps. (1) Typing "let's talk about E = mc²" made Nabla *differentiate* the formula — because every turn was forced to be a computation, there was no "just show me this formula" path. (2) The term breakdown explained a part but dead-ended — you couldn't keep asking "and what is THAT made of" down to first principles.
+
+**Backend (`apps/api/main.py`):**
+- New op **`show`** — returns the expression unchanged so a formula can be placed on the board for exploration rather than transformed. Parses in "display mode" where `E` and `I` (SymPy's Euler number / imaginary unit) are forced to plain symbols, so `E = mc²` reads as energy, not 2.718.
+- System prompt gained a "DISPLAYING A FORMULA" section: when the user wants to look at / discuss / understand a formula, emit `op="show"`, never `diff`/`integrate`. Equations are written `Eq(lhs, rhs)`.
+- New endpoint **`POST /explain-concept`** — the recursive drill-down engine. Takes a concept plus the drill-down path that led to it; returns an explanation, 2-4 *more fundamental* sub-concepts, and an `is_fundamental` flag. Uses an LLM tool call (`concept_breakdown`) for structured output. The system prompt instructs the model to move genuinely downward toward primitives and to flag bedrock — base physical quantities, math axioms, constants of nature.
+
+**Frontend (`apps/web/`):**
+- New **`ConceptExplorer`** overlay — the recursive drill-down UI:
+  - Breadcrumb at the top showing the full path down (the formula → concept → sub-concept → …). Click any crumb to climb back up.
+  - Current concept with its explanation.
+  - Sub-concept chips — click to drill one level deeper.
+  - A **⊥ bedrock** badge when a fundamental concept is reached; no deeper chips, with a note to climb back up via the breadcrumb.
+- **`TermBreakdown` reworked** — each part chip now opens the ConceptExplorer rooted at that part (with the whole formula as drill context). A new "⌄ drill this to fundamentals" button opens the explorer rooted at the whole expression.
+- `show` added to the `Op` union and `prettifyPretty`.
+
+**Verified — 11-case suite (all PASS):**
+- Core ops (integrate, diff, dsolve) still correct.
+- `show` displays `E=mc²` and `F=ma` unchanged.
+- The screenshot bug is fixed: "lets talk about e = mc square" now → `op=show`, not `diff`. "show me Newton's second law" → `op=show`, `Eq(F, m*a)`.
+- `explain-concept`: "Energy" returns 4 sub-concepts, not fundamental. "time" at depth returns `is_fundamental=true`, no sub-concepts — it reached bedrock.
+- 3-hop chain: kinetic energy → mass → (explained) — each hop goes deeper.
+
+---
+
 ## What this gives you today
 
-A research workbench that delivers nearly the whole original vision. Sessions persist. New users are onboarded. The equation visibly morphs forward on each step. You can click any part of the current expression and ask what it means. You can double-click any past step to see its full internals. Branch structure is drawn, not implied. Twelve ops span calculus, algebra, series, summations, and ODEs. The one genuinely unfinished item — cross-step per-term provenance — is documented as V2 because it needs a dedicated step-tracking engine.
+A workbench that is now *two tools in one*. As before, it transforms expressions with twelve symbolic ops. New in V1.5: it also **shows** formulas you just want to understand, and lets you **recursively drill any concept down to first principles** — E=mc² → energy → work → force → mass + acceleration → … → bedrock — with a breadcrumb to navigate the descent. The "learn how each thing works, all the way back to the fundamental" idea is now a real, working feature. Sessions persist, new users are onboarded, equations morph forward, branches are drawn. The one remaining V2 item is cross-step per-term provenance (which symbolic term came from which), which needs a dedicated SymPy step engine.

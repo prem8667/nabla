@@ -82,9 +82,30 @@ Open http://localhost:3000.
 - **Enter** submits. **Shift+Enter** inserts a newline.
 - Above the input is the history of what you've sent and what Nabla replied with.
 
-### Inspecting the equation
+### Showing a formula (not computing it)
 
-Under the active equation is a **parts breakdown** — the expression split into its top-level pieces (terms of a sum, factors of a product, base/exponent of a power). Click any part chip and Nabla explains what that piece is and why it's there.
+If you want to *look at* a formula rather than transform it, just say so:
+
+```
+let's talk about E = mc^2
+show me Newton's second law
+put the quadratic formula on the board
+```
+
+Nabla uses the `show` op — the formula appears on the board unchanged, so you can explore its parts instead of having it differentiated or integrated.
+
+### Inspecting the equation + drilling to fundamentals
+
+Under the active equation is a **parts breakdown** — the expression split into its top-level pieces (terms of a sum, factors of a product, base/exponent of a power).
+
+Two ways to explore:
+
+- **Click any part chip** → opens the **Concept Explorer** rooted at that part.
+- **Click "⌄ drill this to fundamentals"** → opens the Concept Explorer rooted at the whole formula.
+
+The **Concept Explorer** is a recursive drill-down. It explains the current concept, then offers 2-4 *more fundamental* concepts it's built from. Click one to go deeper. Keep going — `E = mc²` → Energy → Work → Force → Mass + Acceleration → … — until you hit **⊥ bedrock**: a concept that can't be reduced further (a primitive physical quantity, a math axiom, a constant of nature).
+
+A **breadcrumb at the top** shows your full path down. Click any crumb to climb back up and explore a different branch.
 
 **Double-click any step** in the timeline to open its detail panel: the full input → output, the op applied, the LLM's reasoning, raw SymPy, and which step it forked from.
 
@@ -225,6 +246,7 @@ If SymPy can't parse the expression or the op fails, the backend returns HTTP 40
 | `trigsimp` | Trig-identity-aware simplification | none |
 | `apart` | Partial-fraction decomposition | `var` |
 | `dsolve` | Solve ODE (form `expr = 0` in `f(x)`) | `args.func` (default `'f'`), `var` (default `'x'`) |
+| `show` | Display a formula unchanged (for exploring, not computing) | none |
 
 The "primary symbol" detection picks `x` if present, otherwise `y`, `t`, `z`, then whichever symbol is alphabetically first.
 

@@ -70,15 +70,21 @@ PREFER ACTION OVER QUESTIONS:
 - When the user says "let's do a derivation" or "where do I start" without specifying: commit to a SMALL, ICONIC canonical problem (e.g. integrate x*sin(x), or diff x**2) and apply the first step. Use the explanation to invite the user to pick a different example if they want.
 - Asking "which function would you like?" is almost always WORSE than picking one. The user can pivot in their next turn.
 
+DISPLAYING A FORMULA (do not compute it):
+- When the user wants to LOOK AT, DISCUSS, or UNDERSTAND a formula or equation rather than transform it — e.g. "let's talk about E = mc^2", "show me Newton's second law", "put the quadratic formula on the board", "what does the ideal gas law look like" — use op="show". It places the expression on the board UNCHANGED so the user can explore its parts and drill into the meaning of each symbol.
+- Do NOT differentiate, integrate, or otherwise transform a formula the user just wants to see. "let's talk about E = mc^2" must become op="show", expr="Eq(E, m*c**2)" — never op="diff".
+- Write equations with `Eq(lhs, rhs)`: `E = mc^2` → `Eq(E, m*c**2)`; `F = ma` → `Eq(F, m*a)`.
+
 Hard rules:
 - ALWAYS emit exactly one tool call. Never produce a plain text answer. Never write math in prose. SymPy will do the computation.
-- Use SymPy syntax in `expr`: `x**2` (not x^2), `x*sin(x)`, `exp(x)`, `log(x)`, `pi`, `sqrt(x)`, `oo` for infinity.
+- Use SymPy syntax in `expr`: `x**2` (not x^2), `x*sin(x)`, `exp(x)`, `log(x)`, `pi`, `sqrt(x)`, `oo` for infinity. Equations use `Eq(lhs, rhs)`.
 - When the user means "apply this to what is on the board" (e.g. "simplify that", "now differentiate it", "factor the result"), OMIT `expr`. The backend will use the active step's output.
 - When the user introduces a fresh expression, PROVIDE `expr`.
 - `var` is optional. Provide it only when the user names a variable, or when more than one symbol is present and the choice would otherwise be ambiguous.
 - `explanation` is one or two short sentences a researcher would find useful — say *why* this move makes sense for the current state, not how to do it. When you committed to a canonical example, say so briefly.
 
 Supported ops:
+- show (no args; display the expression unchanged — for formulas the user wants to see/discuss)
 - integrate (var; e.g. var='x')
 - diff (var)
 - simplify
@@ -108,6 +114,7 @@ TOOLS: list[dict[str, Any]] = [
                     "op": {
                         "type": "string",
                         "enum": [
+                            "show",
                             "integrate",
                             "diff",
                             "simplify",
@@ -259,9 +266,22 @@ class ExplainPartResponse(BaseModel):
     explanation: str
 
 
+class ExplainConceptRequest(BaseModel):
+    concept: str
+    path: list[str] = Field(default_factory=list)  # drill-down ancestors, root first
+
+
+class ConceptResponse(BaseModel):
+    concept: str
+    explanation: str
+    subconcepts: list[str]
+    is_fundamental: bool
+
+
 # ─── SymPy helpers ───────────────────────────────────────────────────────────
 
 SUPPORTED_OPS = {
+    "show",
     "integrate",
     "diff",
     "simplify",
@@ -276,9 +296,18 @@ SUPPORTED_OPS = {
     "dsolve",
 }
 
+# SymPy treats some single capital letters as built-ins (E = Euler's number,
+# I = imaginary unit, etc). In a "show this formula" context the user almost
+# always means a plain symbol (E for energy, I for current/inertia). Force them.
+_DISPLAY_LOCALS: dict[str, Any] = {
+    name: sympy.Symbol(name) for name in ("E", "I", "N", "O", "Q", "S")
+}
 
-def _sympify(s: str) -> sympy.Expr:
+
+def _sympify(s: str, *, display: bool = False) -> sympy.Expr:
     try:
+        if display:
+            return sympy.sympify(s, locals=_DISPLAY_LOCALS)
         return sympy.sympify(s)
     except (sympy.SympifyError, SyntaxError, TypeError) as e:
         raise HTTPException(status_code=400, detail=f"Could not parse expression: {e}")
@@ -306,11 +335,16 @@ def _apply_op(expr_str: str, op: str, args: dict[str, Any]) -> TransformResult:
             detail=f"Unsupported op '{op}'. Try one of: {sorted(SUPPORTED_OPS)}",
         )
 
-    expr = _sympify(expr_str)
+    # `show` parses in display mode so E/I read as plain symbols.
+    expr = _sympify(expr_str, display=(op == "show"))
     input_latex = sympy.latex(expr)
 
     try:
-        if op == "integrate":
+        if op == "show":
+            # Display the expression unchanged — used to put a formula on the
+            # board so the user can explore it rather than transform it.
+            result = expr
+        elif op == "integrate":
             var = _symbol(args.get("var") or _primary_symbol(expr))
             result = sympy.integrate(expr, var)
         elif op == "diff":
@@ -551,6 +585,105 @@ def explain_part(req: ExplainPartRequest) -> ExplainPartResponse:
         logger.warning("explain-part LLM error: %s", e)
         return ExplainPartResponse(
             explanation=f"This sub-expression is `{part}`. (LLM explanation unavailable: {e})"
+        )
+
+
+# ─── Concept drill-down ───────────────────────────────────────────────────────
+
+CONCEPT_TOOL: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "concept_breakdown",
+            "description": "Explain a concept and point toward the more fundamental concepts it rests on.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "explanation": {
+                        "type": "string",
+                        "description": "2-4 sentence explanation of the concept, pitched for a curious researcher who just drilled down from the parent concept.",
+                    },
+                    "subconcepts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "2-4 MORE FUNDAMENTAL concepts this one is built from or defined in terms of — what to drill into next to get closer to first principles. Empty if this concept is already fundamental. Each item is a short noun phrase.",
+                    },
+                    "is_fundamental": {
+                        "type": "boolean",
+                        "description": "True if this concept cannot be reduced further: a primitive physical quantity (length, time, mass, charge), a mathematical axiom or primitive, or an empirical constant of nature.",
+                    },
+                },
+                "required": ["explanation", "subconcepts", "is_fundamental"],
+            },
+        },
+    }
+]
+
+CONCEPT_SYSTEM = """You help a researcher understand a concept by drilling down toward first principles — like peeling an onion until you reach bedrock.
+
+You are given the current concept and the drill-down path that led to it (root first). Call concept_breakdown exactly once:
+- explanation: explain the current concept concisely, at a depth appropriate to someone who just arrived here from the parent concept. Be precise; assume intelligence.
+- subconcepts: list 2-4 MORE FUNDAMENTAL concepts the current one is built from or defined in terms of. These are what the user drills into next. Move genuinely DOWNWARD toward primitives — do not list siblings or applications. Each is a short noun phrase.
+- is_fundamental: true ONLY when the concept genuinely cannot be reduced further — a base physical quantity (length, time, mass, electric charge), a mathematical axiom or primitive notion (set, point, the successor function), or an empirical constant of nature (speed of light, Planck's constant). When true, return an empty subconcepts list.
+
+Stay on a coherent path to bedrock. Example chain: "kinetic energy" -> "energy" -> "work" -> "force" -> "mass" + "acceleration" -> "acceleration" -> "velocity" + "time" -> "time" (fundamental)."""
+
+
+@app.post("/explain-concept", response_model=ConceptResponse)
+def explain_concept(req: ExplainConceptRequest) -> ConceptResponse:
+    """Recursive drill-down: explain a concept and surface the more fundamental
+    concepts beneath it, so the user can climb all the way down to first
+    principles."""
+    concept = req.concept.strip()
+    if not concept:
+        raise HTTPException(status_code=400, detail="Empty concept.")
+
+    if _openai_client is None:
+        return ConceptResponse(
+            concept=concept,
+            explanation=f"'{concept}' — set OPENAI_API_KEY for concept drill-down.",
+            subconcepts=[],
+            is_fundamental=True,
+        )
+
+    path_str = " -> ".join(req.path) if req.path else "(this is the starting concept)"
+    user_msg = (
+        f"Drill-down path so far (root first): {path_str}\n"
+        f"Current concept to break down: {concept}"
+    )
+
+    try:
+        resp = _openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=2048,
+            messages=[
+                {"role": "system", "content": CONCEPT_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            tools=CONCEPT_TOOL,
+            tool_choice="required",
+        )
+        tcs = resp.choices[0].message.tool_calls or []
+        if not tcs:
+            raise ValueError("no tool call")
+        data = json.loads(tcs[0].function.arguments or "{}")
+        subs = data.get("subconcepts") or []
+        is_fund = bool(data.get("is_fundamental", False))
+        if is_fund:
+            subs = []
+        return ConceptResponse(
+            concept=concept,
+            explanation=data.get("explanation", f"'{concept}'."),
+            subconcepts=[str(s) for s in subs][:4],
+            is_fundamental=is_fund,
+        )
+    except Exception as e:
+        logger.warning("explain-concept error: %s", e)
+        return ConceptResponse(
+            concept=concept,
+            explanation=f"Could not break down '{concept}': {e}",
+            subconcepts=[],
+            is_fundamental=True,
         )
 
 

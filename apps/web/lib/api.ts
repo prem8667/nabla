@@ -118,3 +118,13 @@ export const decompose = (expr: string) =>
 
 export const explainPart = (whole: string, part: string) =>
   postJSON<ExplainPartResponse>("/explain-part", { whole, part });
+
+export type ConceptResponse = {
+  concept: string;
+  explanation: string;
+  subconcepts: string[];
+  is_fundamental: boolean;
+};
+
+export const explainConcept = (concept: string, path: string[]) =>
+  postJSON<ConceptResponse>("/explain-concept", { concept, path });
